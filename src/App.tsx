@@ -1,0 +1,434 @@
+import React, { useState, useEffect, useRef } from 'react';
+import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest } from './shared/types';
+
+const SUGGESTIONS = [
+  '帮我列出当前目录下有哪些文件',
+  '浏览器搜索 React 19 的新特性',
+  '记住：我叫张三，住在上海',
+  '执行 dir 命令看看 Windows 目录'
+];
+
+type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
+
+// 自定义标题栏
+function TitleBar({ title }: { title: string }) {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    window.api.window?.isMaximized?.().then(setMaximized);
+  }, []);
+
+  return (
+    <div className="titlebar">
+      <div className="titlebar-drag">
+        <div className="titlebar-brand">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="url(#g1)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <defs><linearGradient id="g1" x1="2" y1="2" x2="22" y2="22"><stop stopColor="#6c8cff"/><stop offset="1" stopColor="#a78bfa"/></linearGradient></defs>
+          </svg>
+          <span className="titlebar-title">{title}</span>
+        </div>
+      </div>
+      <div className="titlebar-controls">
+        <button className="tb-btn" onClick={() => window.api.window?.minimize?.()} title="最小化">
+          <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" fill="currentColor"/></svg>
+        </button>
+        <button className="tb-btn" onClick={async () => { await window.api.window?.maximize?.(); setMaximized(await window.api.window?.isMaximized?.() ?? false); }} title={maximized ? '还原' : '最大化'}>
+          {maximized
+            ? <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="0" width="9" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/><rect x="0" y="2.5" width="9" height="9" rx="1" fill="var(--bg-primary)" stroke="currentColor" strokeWidth="1.2"/></svg>
+            : <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg>
+          }
+        </button>
+        <button className="tb-btn tb-close" onClick={() => window.api.window?.close?.()} title="关闭">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [view, setView] = useState<'chat' | 'settings'>('chat');
+  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
+  const [configSaved, setConfigSaved] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
+  const [streamingDeltas, setStreamingDeltas] = useState<Record<string, string>>({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 更新状态
+  const [updateState, setUpdateState] = useState<UpdateState>('idle');
+  const [updateVersion, setUpdateVersion] = useState('');
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateError, setUpdateError] = useState('');
+
+  // LLM 测试连接
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'fail'>('idle');
+  const [testResult, setTestResult] = useState<{ latency?: number; model?: string; error?: string } | null>(null);
+
+  useEffect(() => { loadInitialData(); setupStreamListener(); setupConfirmListener(); setupUpdateListener(); }, []);
+  useEffect(() => { if (activeSessionId) loadMessages(activeSessionId); }, [activeSessionId]);
+  useEffect(() => { scrollToBottom(); }, [messages, streamingDeltas]);
+
+  async function loadInitialData() {
+    try {
+      const s = await window.api.session.list();
+      setSessions(s);
+      if (s.length > 0) setActiveSessionId(s[0].id);
+      const llm = await window.api.llm.getConfig();
+      setLlmConfig(llm);
+      if (!llm.apiKey) setView('settings');
+    } catch (e) { console.error(e); }
+  }
+
+  function setupStreamListener() {
+    window.api.chat.onStream(({ messageId, delta, done }) => {
+      setStreamingDeltas((prev) => {
+        const next = { ...prev };
+        if (!done) next[messageId] = (next[messageId] || '') + delta;
+        else delete next[messageId];
+        return next;
+      });
+    });
+  }
+
+  function setupConfirmListener() { window.api.tools.onConfirm((req) => setPendingConfirm(req)); }
+
+  function setupUpdateListener() {
+    window.api.updater.onUpdateAvailable((info) => {
+      setUpdateState('available');
+      setUpdateVersion(info.version);
+    });
+    window.api.updater.onProgress((progress) => {
+      setUpdateState('downloading');
+      setUpdateProgress(progress.percent);
+    });
+    window.api.updater.onDownloaded((info) => {
+      setUpdateState('downloaded');
+      setUpdateVersion(info.version);
+    });
+    window.api.updater.onError((err) => {
+      setUpdateState('error');
+      setUpdateError(err);
+    });
+  }
+
+  async function loadMessages(sessionId: string) {
+    try { setMessages(await window.api.message.list(sessionId)); } catch (e) { console.error(e); }
+  }
+
+  async function handleNewSession() {
+    try {
+      const title = '新对话 ' + new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const s = await window.api.session.create(title);
+      setSessions((prev) => [s, ...prev]);
+      setActiveSessionId(s.id);
+      setMessages([]);
+    } catch (e) { console.error(e); }
+  }
+
+  async function handleDeleteSession(sessionId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm('确定删除这个对话？')) return;
+    try {
+      await window.api.session.delete(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        const remaining = sessions.filter((s) => s.id !== sessionId);
+        setActiveSessionId(remaining.length > 0 ? remaining[0].id : '');
+      }
+    } catch (err) { console.error(err); }
+  }
+
+  async function handleSend() {
+    if (!inputText.trim() || isLoading) return;
+    if (!activeSessionId) { await handleNewSession(); return; }
+    const text = inputText.trim();
+    setInputText('');
+    setIsLoading(true);
+    try {
+      const userMsg: ChatMessage = { id: 'u_' + Date.now(), sessionId: activeSessionId, role: 'user', content: text, createdAt: new Date().toISOString() };
+      setMessages((prev) => [...prev, userMsg]);
+      const assistantMsg: ChatMessage = { id: 'a_' + Date.now(), sessionId: activeSessionId, role: 'assistant', content: '', createdAt: new Date().toISOString() };
+      setMessages((prev) => [...prev, assistantMsg]);
+      await window.api.chat.send({ sessionId: activeSessionId, message: text, agentId: 'default-agent' });
+      await loadMessages(activeSessionId);
+    } catch (e) { console.error(e); } finally { setIsLoading(false); }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  }
+
+  function handleConfirm(approved: boolean) {
+    if (!pendingConfirm) return;
+    window.api.tools.respondConfirm(pendingConfirm.messageId, approved);
+    setPendingConfirm(null);
+  }
+
+  async function handleSaveLlmConfig() {
+    if (!llmConfig) return;
+    try {
+      const ok = await window.api.llm.saveConfig(llmConfig);
+      if (ok) { setConfigSaved(true); setTimeout(() => setConfigSaved(false), 2000); }
+    } catch (e) { console.error(e); }
+  }
+
+  async function handleTestConnection() {
+    if (!llmConfig) return;
+    setTestStatus('testing');
+    setTestResult(null);
+    try {
+      const result = await window.api.llm.testConnection(llmConfig);
+      setTestResult(result);
+      setTestStatus(result.success ? 'success' : 'fail');
+    } catch (e: any) {
+      setTestResult({ error: e.message });
+      setTestStatus('fail');
+    }
+  }
+
+  async function handleCheckUpdate() {
+    setUpdateState('checking');
+    try {
+      const result = await window.api.updater.check();
+      if (result.error) {
+        setUpdateState('error');
+        setUpdateError(result.error);
+      } else if (!result.available) {
+        setUpdateState('idle');
+      }
+    } catch { setUpdateState('idle'); }
+  }
+
+  function scrollToBottom() { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }
+
+  function renderMessage(msg: ChatMessage, index: number) {
+    if (msg.role === 'tool') {
+      return (
+        <div key={msg.id || 'tool_' + index} className="msg msg-tool">
+          <div className="msg-tool-card">
+            <div className="tool-badge">TOOL</div>
+            {msg.content}
+          </div>
+        </div>
+      );
+    }
+    const isStreaming = !!streamingDeltas[msg.id];
+    const content = msg.content || streamingDeltas[msg.id] || msg.content;
+
+    return (
+      <div key={msg.id || index} className={`msg msg-${msg.role}`}>
+        <div className={`msg-avatar msg-avatar-${msg.role}`}>
+          {msg.role === 'user' ? 'U' : 'A'}
+        </div>
+        <div className="msg-body">
+          <div className={`msg-bubble${isStreaming && !msg.content ? ' typing' : ''}`}>
+            {content || (isStreaming ? '' : '...')}
+          </div>
+          {msg.toolCalls && msg.toolCalls.length > 0 && (
+            <div className="msg-tool-card">
+              <div className="tool-badge">CALL</div>
+              {msg.toolCalls.map((tc, i) => (
+                <div key={i} className="tool-call-item">
+                  <span className="tool-name">{tc.name}</span>
+                  <span className="tool-args">
+                    {Object.entries(tc.arguments || {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const activeTitle = sessions.find((s) => s.id === activeSessionId)?.title || 'AppClaw';
+
+  return (
+    <div className="app">
+      <TitleBar title={view === 'settings' ? 'AppClaw - 设置' : activeTitle} />
+
+      {/* 更新提示条 */}
+      {updateState === 'available' && (
+        <div className="update-bar">
+          <span>发现新版本 v{updateVersion}</span>
+          <button className="update-btn" onClick={() => { window.api.updater.download(); setUpdateState('downloading'); setUpdateProgress(0); }}>立即下载</button>
+          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>稍后</button>
+        </div>
+      )}
+      {updateState === 'downloading' && (
+        <div className="update-bar downloading">
+          <span>正在下载更新 {updateProgress}%</span>
+          <div className="progress-track"><div className="progress-fill" style={{ width: `${updateProgress}%` }} /></div>
+        </div>
+      )}
+      {updateState === 'downloaded' && (
+        <div className="update-bar downloaded">
+          <span>v{updateVersion} 已就绪</span>
+          <button className="update-btn" onClick={() => window.api.updater.install()}>重启安装</button>
+        </div>
+      )}
+      {updateState === 'error' && (
+        <div className="update-bar error">
+          <span>更新失败: {updateError}</span>
+          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>关闭</button>
+        </div>
+      )}
+
+      <div className="app-body">
+        {/* 侧栏 */}
+        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
+          <div className="sidebar-head">
+            {!sidebarCollapsed && <span className="logo-text">AppClaw</span>}
+            <button className="icon-btn" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} title={sidebarCollapsed ? '展开' : '收起'}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d={sidebarCollapsed ? 'M6 3l5 5-5 5' : 'M10 3L5 8l5 5'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
+            {!sidebarCollapsed && (
+              <button className="icon-btn" onClick={handleNewSession} title="新对话">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            )}
+          </div>
+
+          {!sidebarCollapsed && (
+            <>
+              <div className="sidebar-label">对话</div>
+              <div className="session-list">
+                {sessions.map((s) => (
+                  <div key={s.id} className={`session-item${s.id === activeSessionId ? ' active' : ''}`} onClick={() => setActiveSessionId(s.id)}>
+                    <span className="session-title">{s.title}</span>
+                    <button className="session-del" onClick={(e) => handleDeleteSession(s.id, e)}>
+                      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                    </button>
+                  </div>
+                ))}
+                {sessions.length === 0 && <div className="empty-hint">暂无对话</div>}
+              </div>
+            </>
+          )}
+
+          <div className="sidebar-foot">
+            <button className={`foot-btn${view === 'settings' ? ' active' : ''}`} onClick={() => setView(view === 'settings' ? 'chat' : 'settings')}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.2"/><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.1 3.1l.7.7M12.2 12.2l.7.7M3.1 12.9l.7-.7M12.2 3.8l.7-.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+              {!sidebarCollapsed && <span>设置</span>}
+            </button>
+          </div>
+        </aside>
+
+        {/* 主区域 */}
+        <main className="main">
+          {view === 'settings' ? (
+            <div className="settings">
+              <h2 className="settings-heading">设置</h2>
+              <div className="card">
+                <h3>大模型配置</h3>
+                <div className="field">
+                  <label>API 提供商</label>
+                  <input value={llmConfig?.provider || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, provider: e.target.value as LLMConfig['provider'] })} placeholder="openai / anthropic / deepseek" />
+                </div>
+                <div className="field">
+                  <label>API Key</label>
+                  <input type="password" value={llmConfig?.apiKey || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, apiKey: e.target.value })} placeholder="sk-..." />
+                </div>
+                <div className="field-row">
+                  <div className="field"><label>模型名称</label><input value={llmConfig?.model || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, model: e.target.value })} placeholder="gpt-4o-mini" /></div>
+                  <div className="field"><label>Base URL</label><input value={llmConfig?.baseUrl || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" /></div>
+                </div>
+                <div className="btn-row">
+                  <button className={`btn-primary${configSaved ? ' btn-saved' : ''}`} onClick={handleSaveLlmConfig}>{configSaved ? '已保存' : '保存配置'}</button>
+                  <button className={`btn-test${testStatus === 'success' ? ' test-ok' : testStatus === 'fail' ? ' test-fail' : ''}`} onClick={handleTestConnection} disabled={testStatus === 'testing' || !llmConfig?.apiKey}>
+                    {testStatus === 'testing' ? '测试中...' : testStatus === 'success' ? '连接成功' : testStatus === 'fail' ? '连接失败' : '测试连接'}
+                  </button>
+                </div>
+                {testResult && (
+                  <div className={`test-result${testResult.error ? ' test-fail' : ' test-ok'}`}>
+                    {testResult.error
+                      ? `错误: ${testResult.error}`
+                      : `连接成功! 模型: ${testResult.model}, 延迟: ${testResult.latency}ms`
+                    }
+                  </div>
+                )}
+              </div>
+              <div className="card">
+                <h3>检查更新</h3>
+                <div className="update-section">
+                  <span className="update-info">当前版本: {__APP_VERSION__}</span>
+                  <button className="btn-primary" onClick={handleCheckUpdate} disabled={updateState === 'checking'}>
+                    {updateState === 'checking' ? '检查中...' : '检查更新'}
+                  </button>
+                </div>
+              </div>
+              <div className="card">
+                <h3>关于 AppClaw</h3>
+                <p className="about-text">桌面端 AI 助手，支持对话式交互、文件系统读写、浏览器搜索、命令行执行、启动桌面程序，以及长期记忆（PGlite 本地存储）。所有数据保存在 ~/.appclaw/ 目录下。</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="chat-top">
+                <div className="chat-top-title">{activeTitle}</div>
+                <div className={`status-dot${llmConfig?.apiKey ? ' on' : ''}`}>
+                  <span className="dot" />
+                  {llmConfig?.apiKey ? `${llmConfig.model || '已连接'}` : '未配置'}
+                </div>
+              </div>
+
+              <div className="messages">
+                {messages.length === 0 ? (
+                  <div className="welcome">
+                    <div className="welcome-icon">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="url(#wg)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><defs><linearGradient id="wg" x1="2" y1="2" x2="22" y2="22"><stop stopColor="#6c8cff"/><stop offset="1" stopColor="#a78bfa"/></linearGradient></defs></svg>
+                    </div>
+                    <h2>你好，我是 AppClaw</h2>
+                    <p>一个能调用你电脑的桌面 AI 助手</p>
+                    <div className="chips">
+                      {SUGGESTIONS.map((s, i) => (
+                        <button key={i} className="chip" onClick={() => setInputText(s)}>{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {messages.map((msg, idx) => renderMessage(msg, idx))}
+                    {pendingConfirm && (
+                      <div className="msg msg-assistant">
+                        <div className="msg-avatar msg-avatar-assistant">A</div>
+                        <div className="msg-body">
+                          <div className="confirm-card">
+                            <div className="confirm-title">需要你的确认</div>
+                            <div className="confirm-body">{pendingConfirm.preview}</div>
+                            <div className="confirm-btns">
+                              <button className="btn-allow" onClick={() => handleConfirm(true)}>允许执行</button>
+                              <button className="btn-deny" onClick={() => handleConfirm(false)}>拒绝</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                  </>
+                )}
+              </div>
+
+              <div className="input-area">
+                <div className="input-box">
+                  <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={handleKeyDown} placeholder="输入消息，Enter 发送..." rows={1} />
+                  <button className="send-btn" onClick={handleSend} disabled={isLoading || !inputText.trim()}>
+                    <svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M2 8l12-6-6 12V8H2z" fill="currentColor"/></svg>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
