@@ -10,6 +10,7 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      deployments: write
 
     steps:
       - name: Checkout
@@ -30,4 +31,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder --win --publish always --config.publish.provider=github --config.publish.owner=codingwang-java --config.publish.repo=appclaw-desktop
+        run: npx electron-builder --win --publish always
