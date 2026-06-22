@@ -8,7 +8,7 @@ const SUGGESTIONS = [
   '执行 dir 命令看看 Windows 目录'
 ];
 
-type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
+type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error' | 'up-to-date';
 
 // 自定义标题栏
 function TitleBar({ title }: { title: string }) {
@@ -103,6 +103,10 @@ export default function App() {
     window.api.updater.onUpdateAvailable((info) => {
       setUpdateState('available');
       setUpdateVersion(info.version);
+    });
+    window.api.updater.onUpdateNotAvailable(() => {
+      // 仅手动检查时显示"已是最新"
+      setUpdateState((prev) => prev === 'checking' ? 'up-to-date' : 'idle');
     });
     window.api.updater.onProgress((progress) => {
       setUpdateState('downloading');
@@ -200,8 +204,11 @@ export default function App() {
       if (result.error) {
         setUpdateState('error');
         setUpdateError(result.error);
-      } else if (!result.available) {
-        setUpdateState('idle');
+      } else if (result.available) {
+        setUpdateState('available');
+        setUpdateVersion(result.version || '');
+      } else {
+        setUpdateState('up-to-date');
       }
     } catch { setUpdateState('idle'); }
   }
@@ -278,6 +285,12 @@ export default function App() {
       {updateState === 'error' && (
         <div className="update-bar error">
           <span>更新失败: {updateError}</span>
+          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>关闭</button>
+        </div>
+      )}
+      {updateState === 'up-to-date' && (
+        <div className="update-bar up-to-date">
+          <span>已是最新版本 v{__APP_VERSION__}</span>
           <button className="update-dismiss" onClick={() => setUpdateState('idle')}>关闭</button>
         </div>
       )}
