@@ -1,7 +1,33 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, app } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
 
 let downloadedInfo: UpdateInfo | null = null;
+
+// 更新缓存目录
+function getUpdateCacheDir(): string {
+  return path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'appclaw-updater');
+}
+
+// 清理旧的更新缓存
+function cleanUpdateCache() {
+  const cacheDir = getUpdateCacheDir();
+  try {
+    if (fs.existsSync(cacheDir)) {
+      const files = fs.readdirSync(cacheDir);
+      for (const file of files) {
+        const filePath = path.join(cacheDir, file);
+        try {
+          fs.rmSync(filePath, { recursive: true, force: true });
+        } catch { /* 忽略删除失败的文件 */ }
+      }
+      console.log('[Updater] 已清理更新缓存:', cacheDir);
+    }
+  } catch (e) {
+    console.warn('[Updater] 清理缓存失败:', e);
+  }
+}
 
 export function initAutoUpdater(mainWindow: BrowserWindow) {
   // 开发模式不检查更新
@@ -10,13 +36,15 @@ export function initAutoUpdater(mainWindow: BrowserWindow) {
     return;
   }
 
+  // 启动时清理上次更新留下的缓存
+  cleanUpdateCache();
+
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   // 检查更新出错 - 静默处理网络错误
   autoUpdater.on('error', (err) => {
     const msg = err.message || '';
-    // 网络错误、404 等静默处理，只记录日志
     if (msg.includes('404') || msg.includes('net::') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT') || msg.includes('ENOTFOUND') || msg.includes('No published versions')) {
       console.warn('[Updater] 网络错误（静默）:', msg.substring(0, 100));
       return;
