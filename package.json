@@ -8,7 +8,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/appclaw/appclaw-desktop.git"
+    "url": "https://github.com/codingwang-java/appclaw-desktop.git"
   },
   "scripts": {
     "dev": "vite",
@@ -59,6 +59,10 @@
       "target": ["nsis", "portable"],
       "sign": false
     },
-    "publish": []
+    "publish": {
+      "provider": "github",
+      "owner": "codingwang-java",
+      "repo": "appclaw-desktop"
+    }
   }
 }
