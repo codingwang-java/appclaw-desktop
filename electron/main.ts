@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
-import os from 'os';
+import * as os from 'os';
 import { fileURLToPath } from 'url';
 import { registerIpcHandlers } from './ipc-handlers';
 import { initializeWorkspace } from './services/workspace-manager';
