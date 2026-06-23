@@ -149,6 +149,116 @@ const BUILTIN_TOOLS: Record<string, any[]> = {
         }
       }
     }
+  ],
+  desktop: [
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_screenshot',
+        description: '截取当前屏幕截图并保存为文件。返回截图文件路径，可配合视觉模型分析屏幕内容。',
+        parameters: {
+          type: 'object',
+          properties: {
+            outputPath: { type: 'string', description: '截图保存路径（可选，默认保存到临时目录）' }
+          }
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_click',
+        description: '在指定坐标处点击鼠标左键',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'X 坐标（像素）' },
+            y: { type: 'number', description: 'Y 坐标（像素）' },
+            button: { type: 'string', description: '鼠标按键: left/right/middle，默认 left' }
+          },
+          required: ['x', 'y']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_double_click',
+        description: '在指定坐标处双击鼠标左键',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'X 坐标（像素）' },
+            y: { type: 'number', description: 'Y 坐标（像素）' }
+          },
+          required: ['x', 'y']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_type',
+        description: '模拟键盘输入文字（需要目标窗口已激活）',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: '要输入的文字' }
+          },
+          required: ['text']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_move',
+        description: '将鼠标移动到指定坐标',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'X 坐标（像素）' },
+            y: { type: 'number', description: 'Y 坐标（像素）' }
+          },
+          required: ['x', 'y']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_scroll',
+        description: '在当前位置滚动鼠标滚轮',
+        parameters: {
+          type: 'object',
+          properties: {
+            amount: { type: 'number', description: '滚动量，正数向上，负数向下，默认 120' }
+          }
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_screen_size',
+        description: '获取当前屏幕分辨率',
+        parameters: { type: 'object', properties: {} }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_press_key',
+        description: '按下键盘按键（如 Enter、Tab、Escape、Ctrl+C 等）',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '按键名称，如 Enter、Tab、Escape、F5、{ENTER}、^{c}（Ctrl+C）等' }
+          },
+          required: ['key']
+        }
+      }
+    }
   ]
 };
 
@@ -289,6 +399,9 @@ export async function callTool(toolName: string, args: Record<string, any>): Pro
   }
   if (toolName === 'browser_navigate' || toolName === 'browser_search') {
     return handleBrowserTool(toolName, args);
+  }
+  if (toolName.startsWith('desktop_')) {
+    return handleDesktopTool(toolName, args);
   }
 
   const dotIdx = toolName.indexOf('.');
@@ -446,6 +559,164 @@ async function handleBrowserTool(toolName: string, args: Record<string, any>): P
   });
 }
 
+async function handleDesktopTool(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+  if (process.platform !== 'win32') {
+    return { success: false, content: '桌面操控工具目前仅支持 Windows', error: 'unsupported-platform' };
+  }
+
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+
+  async function runPS(script: string, timeout = 10000): Promise<string> {
+    const tmpFile = path.join(os.tmpdir(), `appclaw-ps-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
+    fs.writeFileSync(tmpFile, script, 'utf-8');
+    try {
+      const { stdout, stderr } = await execAsync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
+        { timeout }
+      );
+      return stdout.trim() || stderr.trim();
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
+  }
+
+  if (toolName === 'desktop_screen_size') {
+    try {
+      const result = await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+$s = [System.Windows.Forms.Screen]::PrimaryScreen
+Write-Output "$($s.Bounds.Width)x$($s.Bounds.Height)"
+`);
+      return { success: true, content: result };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'screen-size-error' };
+    }
+  }
+
+  if (toolName === 'desktop_screenshot') {
+    try {
+      const outputPath = args.outputPath || path.join(os.tmpdir(), `appclaw-screenshot-${Date.now()}.png`);
+      const dir = path.dirname(outputPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const escapedPath = outputPath.replace(/\\/g, '\\\\');
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen
+$bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($screen.Bounds.X, $screen.Bounds.Y, 0, 0, $bitmap.Size)
+$bitmap.Save('${escapedPath}', [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+Write-Output 'OK'
+`, 15000);
+      return { success: true, content: `截图已保存: ${outputPath}` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'screenshot-error' };
+    }
+  }
+
+  if (toolName === 'desktop_move') {
+    try {
+      const x = Math.round(args.x);
+      const y = Math.round(args.y);
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y})
+`);
+      return { success: true, content: `鼠标已移动到 (${x}, ${y})` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'move-error' };
+    }
+  }
+
+  if (toolName === 'desktop_click') {
+    try {
+      const x = Math.round(args.x);
+      const y = Math.round(args.y);
+      const button = args.button || 'left';
+      const downFlag = button === 'right' ? '0x0008' : button === 'middle' ? '0x0020' : '0x0002';
+      const upFlag = button === 'right' ? '0x0010' : button === 'middle' ? '0x0040' : '0x0004';
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y})
+Add-Type -MemberDefinition '[DllImport("user32.dll")]public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);' -Name Win32Mouse -Namespace Win32
+[Win32.Win32Mouse]::mouse_event(${downFlag}, 0, 0, 0, 0)
+Start-Sleep -Milliseconds 50
+[Win32.Win32Mouse]::mouse_event(${upFlag}, 0, 0, 0, 0)
+`);
+      const btnLabel = button === 'right' ? '右键' : button === 'middle' ? '中键' : '左键';
+      return { success: true, content: `已${btnLabel}点击 (${x}, ${y})` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'click-error' };
+    }
+  }
+
+  if (toolName === 'desktop_double_click') {
+    try {
+      const x = Math.round(args.x);
+      const y = Math.round(args.y);
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y})
+Add-Type -MemberDefinition '[DllImport("user32.dll")]public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);' -Name Win32Mouse -Namespace Win32
+[Win32.Win32Mouse]::mouse_event(0x0002, 0, 0, 0, 0)
+[Win32.Win32Mouse]::mouse_event(0x0004, 0, 0, 0, 0)
+Start-Sleep -Milliseconds 100
+[Win32.Win32Mouse]::mouse_event(0x0002, 0, 0, 0, 0)
+[Win32.Win32Mouse]::mouse_event(0x0004, 0, 0, 0, 0)
+`);
+      return { success: true, content: `已双击 (${x}, ${y})` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'double-click-error' };
+    }
+  }
+
+  if (toolName === 'desktop_type') {
+    try {
+      const text = (args.text || '').replace(/`/g, '``').replace(/"/g, '`"');
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("${text}")
+`, 10000);
+      return { success: true, content: `已输入文字: ${args.text}` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'type-error' };
+    }
+  }
+
+  if (toolName === 'desktop_scroll') {
+    try {
+      const amount = Math.round(args.amount || 120);
+      await runPS(`
+Add-Type -MemberDefinition '[DllImport("user32.dll")]public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);' -Name Win32Mouse -Namespace Win32
+[Win32.Win32Mouse]::mouse_event(0x0800, 0, 0, ${amount}, 0)
+`);
+      return { success: true, content: `已滚动 ${amount > 0 ? '向上' : '向下'} ${Math.abs(amount)}` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'scroll-error' };
+    }
+  }
+
+  if (toolName === 'desktop_press_key') {
+    try {
+      const key = (args.key || '').replace(/`/g, '``').replace(/"/g, '`"');
+      await runPS(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("${key}")
+`, 5000);
+      return { success: true, content: `已按下按键: ${args.key}` };
+    } catch (err: any) {
+      return { success: false, content: err.message, error: 'press-key-error' };
+    }
+  }
+
+  return { success: false, content: `未知桌面工具: ${toolName}`, error: 'unknown-desktop-tool' };
+}
+
 export function listServers(): MCPServerConfig[] {
   const arr: MCPServerConfig[] = [];
   for (const [id, s] of servers) {
@@ -464,7 +735,7 @@ export function shutdownAll() {
 }
 
 export function needsConfirmation(toolName: string, agentPermissions: Record<string, any>): boolean {
-  const highRisk = ['fs_write_file', 'shell_exec', 'email_send', 'browser_navigate'];
+  const highRisk = ['fs_write_file', 'shell_exec', 'email_send', 'browser_navigate', 'desktop_click', 'desktop_double_click', 'desktop_type', 'desktop_press_key'];
   if (highRisk.some((t) => toolName.includes(t))) return true;
   const perm = agentPermissions[toolName];
   if (perm && perm.requireConfirm) return true;

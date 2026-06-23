@@ -9,7 +9,9 @@ import type {
   LLMConfig,
   ToolConfirmRequest,
   MCPServerConfig,
-  ToolResult
+  ToolResult,
+  SkillInfo,
+  SkillExecutionResult
 } from './shared/types';
 
 declare global {
@@ -48,6 +50,17 @@ declare global {
       memory: {
         search: (query: string, limit?: number) => Promise<MemoryItem[]>;
         add: (content: string, memoryType?: string) => Promise<boolean>;
+        l1: {
+          get: () => Promise<{ memory: string; user: string }>;
+          save: (data: { memory: string; user: string }) => Promise<boolean>;
+        };
+        l2: {
+          search: (query: string, limit?: number) => Promise<MemoryItem[]>;
+        };
+        l3: {
+          add: (content: string, memoryType?: string, sourceSession?: string) => Promise<string>;
+          search: (query: string, limit?: number) => Promise<MemoryItem[]>;
+        };
       };
       tools: {
         list: () => Promise<MCPServerConfig[]>;
@@ -63,6 +76,15 @@ declare global {
         onProgress: (cb: (progress: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => void) => () => void;
         onDownloaded: (cb: (info: { version: string }) => void) => () => void;
         onError: (cb: (err: string) => void) => () => void;
+      };
+      skill: {
+        list: () => Promise<SkillInfo[]>;
+        execute: (skillId: string, params: Record<string, string>) => Promise<SkillExecutionResult>;
+        delete: (skillId: string) => Promise<boolean>;
+        create: (skill: Omit<SkillInfo, 'installedAt'> & { systemPrompt?: string }) => Promise<boolean>;
+        save: (skillId: string, updates: Partial<SkillInfo> & { systemPrompt?: string }) => Promise<boolean>;
+        getPrompt: (skillId: string) => Promise<string | null>;
+        exists: (skillId: string) => Promise<boolean>;
       };
     };
   }

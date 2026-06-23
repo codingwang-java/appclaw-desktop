@@ -63,6 +63,35 @@ export interface MemoryItem {
   createdAt: string;
 }
 
+export interface SkillParameter {
+  name: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  required: boolean;
+  default?: string;
+  options?: string[];
+  placeholder?: string;
+}
+
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  trigger: string;
+  type: 'declarative' | 'code';
+  tools: string[];
+  parameters: SkillParameter[];
+  enabled: boolean;
+  source: 'local' | 'marketplace' | 'import';
+  installedAt: string;
+}
+
+export interface SkillExecutionResult {
+  success: boolean;
+  output?: string;
+  error?: string;
+}
+
 export interface LLMConfig {
   provider: 'openai' | 'anthropic' | 'deepseek' | 'ollama' | 'custom';
   apiKey: string;

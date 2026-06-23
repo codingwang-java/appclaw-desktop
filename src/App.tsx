@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest } from './shared/types';
+import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest, SkillInfo } from './shared/types';
 
 const SUGGESTIONS = [
   '帮我列出当前目录下有哪些文件',
@@ -47,6 +47,22 @@ function TitleBar({ title }: { title: string }) {
   );
 }
 
+// 设置折叠面板
+function SettingsSection({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`settings-section${open ? ' open' : ''}`}>
+      <div className="settings-section-header" onClick={() => setOpen(!open)}>
+        <span className="settings-section-title">{title}</span>
+        <svg className="settings-section-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M5 7l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </div>
+      {open && <div className="settings-section-body">{children}</div>}
+    </div>
+  );
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
@@ -71,9 +87,16 @@ export default function App() {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'fail'>('idle');
   const [testResult, setTestResult] = useState<{ latency?: number; model?: string; error?: string } | null>(null);
 
+  // Skill 管理
+  const [skillList, setSkillList] = useState<SkillInfo[]>([]);
+  const [showCreateSkill, setShowCreateSkill] = useState(false);
+  const [newSkill, setNewSkill] = useState({ name: '', trigger: '', description: '', type: 'declarative' as 'declarative' | 'code', systemPrompt: '' });
+  const [skillCreating, setSkillCreating] = useState(false);
+
   useEffect(() => { loadInitialData(); setupStreamListener(); setupConfirmListener(); setupUpdateListener(); }, []);
   useEffect(() => { if (activeSessionId) loadMessages(activeSessionId); }, [activeSessionId]);
   useEffect(() => { scrollToBottom(); }, [messages, streamingDeltas]);
+  useEffect(() => { if (view === 'settings') loadSkillList(); }, [view]);
 
   async function loadInitialData() {
     try {
@@ -155,6 +178,35 @@ export default function App() {
     const text = inputText.trim();
     setInputText('');
     setIsLoading(true);
+
+    // /command 解析
+    if (text.startsWith('/')) {
+      const parts = text.slice(1).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+      if (parts.length > 0) {
+        const cmd = parts[0].toLowerCase();
+        try {
+          const skills: SkillInfo[] = await window.api.skill.list();
+          const matched = skills.find((s) => {
+            const triggerCmd = s.trigger.replace(/^\//, '').toLowerCase();
+            return triggerCmd === cmd || triggerCmd === cmd.replace(/-/g, '');
+          });
+          if (matched) {
+            const args: Record<string, string> = {};
+            (matched.parameters || []).forEach((p, i) => {
+              args[p.name] = parts[i + 1]?.replace(/^["']|["']$/g, '') || p.default || '';
+            });
+            const result = await window.api.skill.execute(matched.id, args);
+            const userMsg: ChatMessage = { id: 'u_' + Date.now(), sessionId: activeSessionId, role: 'user', content: text, createdAt: new Date().toISOString() };
+            const assistantContent = result.success ? result.output || '执行完成' : `执行失败: ${result.error}`;
+            const assistantMsg: ChatMessage = { id: 'a_' + Date.now(), sessionId: activeSessionId, role: 'assistant', content: assistantContent, createdAt: new Date().toISOString() };
+            setMessages((prev) => [...prev, userMsg, assistantMsg]);
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) { console.error('Skill 执行错误:', e); }
+      }
+    }
+
     try {
       const userMsg: ChatMessage = { id: 'u_' + Date.now(), sessionId: activeSessionId, role: 'user', content: text, createdAt: new Date().toISOString() };
       setMessages((prev) => [...prev, userMsg]);
@@ -211,6 +263,42 @@ export default function App() {
         setUpdateState('up-to-date');
       }
     } catch { setUpdateState('idle'); }
+  }
+
+  async function loadSkillList() {
+    try { setSkillList(await window.api.skill.list()); } catch (e) { console.error(e); }
+  }
+
+  async function handleDeleteSkill(skillId: string) {
+    if (!confirm('确定删除这个 Skill？')) return;
+    try {
+      await window.api.skill.delete(skillId);
+      await loadSkillList();
+    } catch (e) { console.error(e); }
+  }
+
+  async function handleCreateSkill() {
+    if (!newSkill.name.trim()) return;
+    setSkillCreating(true);
+    try {
+      const id = newSkill.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const trigger = newSkill.trigger || ('/' + id);
+      await window.api.skill.create({
+        id,
+        name: newSkill.name.trim(),
+        description: newSkill.description,
+        trigger: trigger.startsWith('/') ? trigger : '/' + trigger,
+        type: newSkill.type,
+        tools: [],
+        parameters: [],
+        enabled: true,
+        source: 'local',
+        systemPrompt: newSkill.systemPrompt,
+      });
+      setNewSkill({ name: '', trigger: '', description: '', type: 'declarative', systemPrompt: '' });
+      setShowCreateSkill(false);
+      await loadSkillList();
+    } catch (e) { console.error(e); } finally { setSkillCreating(false); }
   }
 
   function scrollToBottom() { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }
@@ -340,8 +428,8 @@ export default function App() {
           {view === 'settings' ? (
             <div className="settings">
               <h2 className="settings-heading">设置</h2>
-              <div className="card">
-                <h3>大模型配置</h3>
+
+              <SettingsSection title="大模型配置" defaultOpen={!llmConfig?.apiKey}>
                 <div className="field">
                   <label>API 提供商</label>
                   <input value={llmConfig?.provider || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, provider: e.target.value as LLMConfig['provider'] })} placeholder="openai / anthropic / deepseek" />
@@ -368,20 +456,84 @@ export default function App() {
                     }
                   </div>
                 )}
-              </div>
-              <div className="card">
-                <h3>检查更新</h3>
+              </SettingsSection>
+
+              <SettingsSection title="检查更新">
                 <div className="update-section">
                   <span className="update-info">当前版本: {__APP_VERSION__}</span>
                   <button className="btn-primary" onClick={handleCheckUpdate} disabled={updateState === 'checking'}>
                     {updateState === 'checking' ? '检查中...' : '检查更新'}
                   </button>
                 </div>
-              </div>
-              <div className="card">
-                <h3>关于 AppClaw</h3>
+              </SettingsSection>
+
+              <SettingsSection title="Skills">
+                <div className="skill-list">
+                  {skillList.length === 0 ? (
+                    <div className="empty-hint">暂无已安装的 Skills</div>
+                  ) : (
+                    skillList.map((skill) => (
+                      <div key={skill.id} className="skill-item">
+                        <div className="skill-info">
+                          <div className="skill-name">
+                            {skill.name}
+                            <span className="skill-type">{skill.type}</span>
+                          </div>
+                          <div className="skill-desc">{skill.description}</div>
+                          <div className="skill-trigger">触发命令: {skill.trigger}</div>
+                        </div>
+                        <button className="skill-del" onClick={() => handleDeleteSkill(skill.id)} title="删除">
+                          <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {showCreateSkill ? (
+                  <div className="skill-create-form">
+                    <div className="field">
+                      <label>Skill 名称</label>
+                      <input value={newSkill.name} onChange={(e) => setNewSkill({ ...newSkill, name: e.target.value })} placeholder="例如：代码审查" />
+                    </div>
+                    <div className="field-row">
+                      <div className="field">
+                        <label>触发命令</label>
+                        <input value={newSkill.trigger} onChange={(e) => setNewSkill({ ...newSkill, trigger: e.target.value })} placeholder="/code-review" />
+                      </div>
+                      <div className="field">
+                        <label>类型</label>
+                        <select value={newSkill.type} onChange={(e) => setNewSkill({ ...newSkill, type: e.target.value as 'declarative' | 'code' })}>
+                          <option value="declarative">声明式 (提示词)</option>
+                          <option value="code">代码式 (JS)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>描述</label>
+                      <input value={newSkill.description} onChange={(e) => setNewSkill({ ...newSkill, description: e.target.value })} placeholder="简要描述这个 Skill 的功能" />
+                    </div>
+                    <div className="field">
+                      <label>系统提示词</label>
+                      <textarea value={newSkill.systemPrompt} onChange={(e) => setNewSkill({ ...newSkill, systemPrompt: e.target.value })} placeholder="当触发此 Skill 时，会注入到对话上下文的系统提示词..." rows={4} />
+                    </div>
+                    <div className="btn-row">
+                      <button className="btn-primary" onClick={handleCreateSkill} disabled={skillCreating || !newSkill.name.trim()}>
+                        {skillCreating ? '创建中...' : '创建 Skill'}
+                      </button>
+                      <button className="btn-cancel" onClick={() => setShowCreateSkill(false)}>取消</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="btn-row">
+                    <button className="btn-primary" onClick={() => setShowCreateSkill(true)}>创建 Skill</button>
+                  </div>
+                )}
+                <p className="skill-hint">提示：在对话中输入 <code>/命令</code> 即可触发 Skill</p>
+              </SettingsSection>
+
+              <SettingsSection title="关于 AppClaw">
                 <p className="about-text">桌面端 AI 助手，支持对话式交互、文件系统读写、浏览器搜索、命令行执行、启动桌面程序，以及长期记忆（PGlite 本地存储）。所有数据保存在 ~/.appclaw/ 目录下。</p>
-              </div>
+              </SettingsSection>
             </div>
           ) : (
             <>

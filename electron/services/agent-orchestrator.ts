@@ -11,7 +11,8 @@ import {
   saveMessage,
   getAgent,
   logToolExecution,
-  addMemory
+  addMemory,
+  triggerNudge
 } from './memory-service';
 import {
   callTool,
@@ -116,6 +117,8 @@ async function runAgentTurn(
     if (maybeExtract) {
       addMemory(maybeExtract, 'fact').catch(() => {});
     }
+
+    triggerNudge(sessionId).catch(() => {});
 
     win?.webContents.send('chat:stream', {
       messageId: assistantMessageId,

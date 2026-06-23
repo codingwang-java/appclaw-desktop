@@ -1,6 +1,6 @@
 {
   "name": "appclaw",
-  "version": "0.2.1",
+  "version": "0.4.0",
   "description": "Desktop Agent - 对话式 AI 桌面助手",
   "main": "dist-electron/main.js",
   "author": "AppClaw",

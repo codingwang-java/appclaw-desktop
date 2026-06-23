@@ -5,7 +5,12 @@ import {
   deleteSession,
   listMessages,
   searchMemory,
-  addMemory
+  addMemory,
+  loadL1Memory,
+  saveL1Memory,
+  searchL2,
+  addL3Memory,
+  searchL3
 } from './services/memory-service';
 import {
   getWorkspace,
@@ -17,6 +22,7 @@ import {
 import { sendChatMessage, resolveToolConfirmation, applyLLMConfig } from './services/agent-orchestrator';
 import { listServers } from './services/mcp-manager';
 import { checkForUpdates, downloadUpdate, quitAndInstall } from './services/update-service';
+import { listSkills, executeSkill, deleteSkill, createSkill, saveSkill, getSkillSystemPrompt, skillExists } from './services/skill-manager';
 import type { ChatSendPayload, LLMConfig, WorkspaceConfig } from '../src/shared/types';
 
 export function registerIpcHandlers() {
@@ -56,6 +62,11 @@ export function registerIpcHandlers() {
     const id = await addMemory(content, memoryType || 'fact');
     return !!id;
   });
+  ipcMain.handle('memory:l1:get', async () => loadL1Memory());
+  ipcMain.handle('memory:l1:save', async (_e, data: { memory: string; user: string }) => saveL1Memory(data));
+  ipcMain.handle('memory:l2:search', async (_e, { query, limit }: { query: string; limit?: number }) => searchL2(query, limit || 3));
+  ipcMain.handle('memory:l3:add', async (_e, { content, memoryType, sourceSession }: { content: string; memoryType?: string; sourceSession?: string }) => addL3Memory(content, memoryType || 'fact', sourceSession));
+  ipcMain.handle('memory:l3:search', async (_e, { query, limit }: { query: string; limit?: number }) => searchL3(query, limit || 5));
 
   ipcMain.handle('tool:list', async () => listServers());
 
@@ -64,13 +75,24 @@ export function registerIpcHandlers() {
   ipcMain.handle('update:download', async () => { await downloadUpdate(); });
   ipcMain.handle('update:install', async () => quitAndInstall());
 
+  // Skill 管理
+  ipcMain.handle('skill:list', async () => listSkills());
+  ipcMain.handle('skill:execute', async (_e, skillId: string, params: Record<string, string>) => executeSkill(skillId, params));
+  ipcMain.handle('skill:delete', async (_e, skillId: string) => deleteSkill(skillId));
+  ipcMain.handle('skill:create', async (_e, skill: any) => createSkill(skill));
+  ipcMain.handle('skill:save', async (_e, skillId: string, updates: any) => saveSkill(skillId, updates));
+  ipcMain.handle('skill:getPrompt', async (_e, skillId: string) => getSkillSystemPrompt(skillId));
+  ipcMain.handle('skill:exists', async (_e, skillId: string) => skillExists(skillId));
+
   // LLM 测试连接
   ipcMain.handle('llm:test', async (_e, cfg: LLMConfig) => {
     try {
       const { OpenAI } = await import('openai');
+      const baseURL = cfg.baseUrl || undefined;
+      console.log('[LLM Test] baseURL:', baseURL, 'model:', cfg.model);
       const client = new OpenAI({
         apiKey: cfg.apiKey,
-        baseURL: cfg.baseUrl || undefined,
+        baseURL,
       });
       const start = Date.now();
       const resp = await client.chat.completions.create({
@@ -81,7 +103,23 @@ export function registerIpcHandlers() {
       const latency = Date.now() - start;
       return { success: true, latency, model: resp.model || cfg.model };
     } catch (err: any) {
-      return { success: false, error: err.message || String(err) };
+      const msg = err.message || String(err);
+      const status = err.status || err.statusCode;
+      const detail = err.error?.message || err.error?.error?.message || '';
+      console.error('[LLM Test] 失败:', status, msg, detail);
+      let errorHint = msg;
+      if (status === 401 || msg.includes('Incorrect API key') || msg.includes('Invalid API Key')) {
+        errorHint = 'API Key 无效，请检查是否正确';
+      } else if (status === 404 || msg.includes('model_not_found') || msg.includes('does not exist')) {
+        errorHint = `模型 ${cfg.model} 不存在，请检查模型名称或 Base URL 是否正确`;
+      } else if (status === 400 && detail) {
+        errorHint = detail;
+      } else if (msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT') || msg.includes('ENOTFOUND')) {
+        errorHint = '无法连接服务器，请检查 Base URL';
+      } else if (msg.includes('fetch failed') || msg.includes('NetworkError')) {
+        errorHint = '网络错误，请检查 Base URL 是否正确';
+      }
+      return { success: false, error: errorHint };
     }
   });
 
