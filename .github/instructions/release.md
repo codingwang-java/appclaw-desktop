@@ -16,21 +16,14 @@ git push
 git push origin v<版本号>
 ```
 
-## 3. 检查构建
+## 3. GitHub Actions 自动执行
 
-推送 tag 会触发 GitHub Actions（`.github/workflows/build.yml`），自动构建并在 GitHub Releases 创建 draft release。
+推送 tag 会触发 `.github/workflows/build.yml`，自动完成：
 
-## 4. 发布正式版
+1. `npm install` + `npm run build`
+2. `electron-builder --win --publish always` 生成 exe 并上传
+3. 自动将 draft release 发布为正式版（`draft: false`）
 
-GitHub Actions 默认创建 draft release，需要手动发布为正式版（`draft: false`），否则客户端无法检测到更新。
+## 4. 验证
 
-```powershell
-# 获取 release id
-$r = Invoke-RestMethod -Uri "https://api.github.com/repos/codingwang-java/appclaw-desktop/releases/tags/v<版本号>" -Headers @{"Authorization"="token $env:GH_TOKEN"}
-# 发布为正式版
-Invoke-RestMethod -Uri "https://api.github.com/repos/codingwang-java/appclaw-desktop/releases/$($r.id)" -Headers @{"Authorization"="token $env:GH_TOKEN"} -Method Patch -Body '{"draft":false}' -ContentType "application/json"
-```
-
-## 5. 验证
-
-确认 https://github.com/codingwang-java/appclaw-desktop/releases 上 release 显示为正式版。客户端启动后应能检测到更新。
+无需手动操作。确认 https://github.com/codingwang-java/appclaw-desktop/releases 上显示最新版本即可。客户端启动后自动检测更新。

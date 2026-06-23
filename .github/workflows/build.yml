@@ -32,3 +32,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --win --publish always
+
+      - name: Publish release (draft → published)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{"Authorization"="token $env:GH_TOKEN"}
+          if ($release.draft) {
+            Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$($release.id)" -Headers @{"Authorization"="token $env:GH_TOKEN"} -Method Patch -Body '{"draft":false}' -ContentType "application/json"
+            Write-Host "Release $tag published (draft → published)"
+          } else {
+            Write-Host "Release $tag is already published"
+          }
