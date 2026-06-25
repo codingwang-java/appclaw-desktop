@@ -120,6 +120,80 @@ export function registerIpcHandlers() {
   ipcMain.handle('skill:getPrompt', async (_e, skillId: string) => getSkillSystemPrompt(skillId));
   ipcMain.handle('skill:exists', async (_e, skillId: string) => skillExists(skillId));
 
+  // Skill Marketplace
+  ipcMain.handle('skill:marketplace:search', async (_e, query: string) => {
+    try {
+      const https = await import('https');
+      const url = `https://skills.sh/topic/design`;
+      return new Promise((resolve) => {
+        https.get(url, { headers: { 'User-Agent': 'AppClaw/1.0' } }, (res: any) => {
+          let data = '';
+          res.on('data', (chunk: string) => data += chunk);
+          res.on('end', () => {
+            const results: any[] = [];
+            const skillRegex = /<a[^>]*href="https:\/\/www\.skills\.sh\/([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<[\s\S]*?<\/a>[\s\S]*?<p[^>]*>([^<]*)<[\s\S]*?<a[^>]*href="https:\/\/www\.skills\.sh\/([^"]+)"[^>]*>[\s\S]*?(\d[\d.]*[KM]?)<\/a>/gi;
+            let m: RegExpExecArray | null;
+            while ((m = skillRegex.exec(data)) !== null) {
+              if (!query || m[2].toLowerCase().includes(query.toLowerCase()) || m[3].toLowerCase().includes(query.toLowerCase())) {
+                results.push({ id: m[1], name: m[2], description: m[3], installs: m[5] });
+              }
+            }
+            resolve(results.slice(0, 30));
+          });
+        }).on('error', (e: Error) => resolve([{ error: e.message }]));
+      });
+    } catch (e: any) { return [{ error: e.message }]; }
+  });
+
+  ipcMain.handle('skill:marketplace:install', async (_e, repoPath: string, skillName: string) => {
+    try {
+      const https = await import('https');
+      const fs = await import('fs');
+      const path = await import('path');
+      const os = await import('os');
+      // Detect if it's from anthropics/skills or vercel-labs/agent-skills pattern
+      const parts = repoPath.split('/');
+      let rawUrl = '';
+      if (repoPath.includes('anthropics/skills') || repoPath.includes('vercel-labs/skills')) {
+        rawUrl = `https://raw.githubusercontent.com/anthropics/skills/main/skills/${skillName}/SKILL.md`;
+      } else if (repoPath.includes('vercel-labs/agent-skills')) {
+        rawUrl = `https://raw.githubusercontent.com/vercel-labs/agent-skills/main/skills/${skillName}/SKILL.md`;
+      } else if (repoPath.includes('pbakaus/impeccable')) {
+        rawUrl = `https://raw.githubusercontent.com/pbakaus/impeccable/main/skill/reference/${skillName}.md`;
+      } else if (repoPath.includes('nextlevelbuilder/ui-ux-pro-max-skill')) {
+        rawUrl = `https://raw.githubusercontent.com/nextlevelbuilder/ui-ux-pro-max-skill/main/.claude/skills/${skillName}/SKILL.md`;
+      } else {
+        // Try generic GitHub raw URL
+        if (parts.length >= 2) {
+          const githubPath = repoPath.replace('www.skills.sh/', '').replace('skills.sh/', '');
+          const repoParts = githubPath.split('/skills/')[0];
+          if (repoParts) {
+            const [owner, repo] = repoParts.split('/');
+            rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/main/skills/${skillName}/SKILL.md`;
+          }
+        }
+      }
+      if (!rawUrl) return { success: false, error: 'Unknown skill repository format' };
+      const targetDir = path.join(os.homedir(), '.appclaw', 'skills', skillName);
+      if (fs.existsSync(path.join(targetDir, 'SKILL.md'))) return { success: false, error: 'Skill already installed' };
+      return new Promise((resolve) => {
+        https.get(rawUrl, (res: any) => {
+          let data = '';
+          res.on('data', (chunk: string) => data += chunk);
+          res.on('end', () => {
+            if (res.statusCode !== 200 || data.length < 50) {
+              resolve({ success: false, error: 'Failed to download skill (not found)' });
+              return;
+            }
+            fs.mkdirSync(targetDir, { recursive: true });
+            fs.writeFileSync(path.join(targetDir, 'SKILL.md'), data, 'utf-8');
+            resolve({ success: true });
+          });
+        }).on('error', (e: Error) => resolve({ success: false, error: e.message }));
+      });
+    } catch (e: any) { return { success: false, error: e.message }; }
+  });
+
   // LLM 测试连接
   ipcMain.handle('llm:test', async (_e, cfg: LLMConfig) => {
     try {

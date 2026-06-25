@@ -1,817 +1,927 @@
-import React, { useState, useEffect, useRef } from 'react';
-import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest, SkillInfo, AgentConfig, CreateAgentRequest, UpdateAgentRequest } from './shared/types';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ChatMessage, Session, LLMConfig, SkillInfo, ToolConfirmRequest } from './shared/types';
+import './styles.css';
 
-const SUGGESTIONS = [
-  '帮我列出当前目录下有哪些文件',
-  '浏览器搜索 React 19 的新特性',
-  '记住：我叫张三，住在上海',
-  '执行 dir 命令看看 Windows 目录'
-];
+function App() {
+  const [view, setView] = useState<'chat' | 'settings'>('welcome');
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [llmConfig, setLlmConfig] = useState<LLMConfig>({ apiKey: '', model: '', baseUrl: '' });
+  const [showSettings, setShowSettings] = useState(false);
+  const [tools, setTools] = useState<any[]>([]);
+  const [confirmReq, setConfirmReq] = useState<ToolConfirmRequest | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
-type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error' | 'up-to-date';
+  // Agent & Skill state
+  const [agents, setAgents] = useState<any[]>([]);
+  const [localSkills, setLocalSkills] = useState<SkillInfo[]>([]);
+  const [activeAgentId, setActiveAgentId] = useState<string>('default');
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<any>(null);
+  const [showSkillModal, setShowSkillModal] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<any>(null);
+  const [showSkillAssign, setShowSkillAssign] = useState<string | null>(null);
+  const [skillSearchQuery, setSkillSearchQuery] = useState('');
 
-// 自定义标题栏
-function TitleBar({ title }: { title: string }) {
-  const [maximized, setMaximized] = useState(false);
+  // Update state
+  const [updateState, setUpdateState] = useState<{ status: string; version?: string; progress?: number }>({ status: 'idle' });
 
+  // Settings drawer state
+  const [activeSetting, setActiveSetting] = useState<string>('llm');
+  const [drawerLevel, setDrawerLevel] = useState<1 | 2 | 3>(1);
+  const [drawerStack, setDrawerStack] = useState<{ level: 1 | 2 | 3; setting: string; data?: any }[]>([{ level: 1, setting: 'llm' }]);
+  const [marketplaceSkills, setMarketplaceSkills] = useState<any[]>([]);
+  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+  const [marketplaceQuery, setMarketplaceQuery] = useState('');
+
+  // LLM test
+  const [testResult, setTestResult] = useState<{ ok?: boolean; msg: string } | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+
+  // Load initial data
   useEffect(() => {
-    window.api.window?.isMaximized?.().then(setMaximized);
+    (async () => {
+      try {
+        const [s, m, t, sk, ag] = await Promise.all([
+          window.api.session.list().catch(() => []),
+          window.api.llm.getConfig().catch(() => ({ apiKey: '', model: '', baseUrl: '' })),
+          window.api.tools.list().catch(() => []),
+          window.api.skill.list().catch(() => []),
+          window.api.agent?.list().catch(() => []) || Promise.resolve([]),
+        ]);
+        setSessions(s);
+        setLlmConfig(m);
+        setTools(t);
+        setLocalSkills(sk);
+        setAgents(ag);
+        if (s.length > 0) {
+          setActiveSessionId(s[0].id);
+          const msgs = await window.api.message.list(s[0].id).catch(() => []);
+          setMessages(msgs);
+          setView('chat');
+        } else {
+          setView('welcome');
+        }
+      } catch (e) { setError('Failed to load data'); }
+    })();
   }, []);
 
-  return (
-    <div className="titlebar">
-      <div className="titlebar-drag">
-        <div className="titlebar-brand">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="url(#g1)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            <defs><linearGradient id="g1" x1="2" y1="2" x2="22" y2="22"><stop stopColor="#6c8cff"/><stop offset="1" stopColor="#a78bfa"/></linearGradient></defs>
-          </svg>
-          <span className="titlebar-title">{title}</span>
-        </div>
-      </div>
-      <div className="titlebar-controls">
-        <button className="tb-btn" onClick={() => window.api.window?.minimize?.()} title="最小化">
-          <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" fill="currentColor"/></svg>
-        </button>
-        <button className="tb-btn" onClick={async () => { await window.api.window?.maximize?.(); setMaximized(await window.api.window?.isMaximized?.() ?? false); }} title={maximized ? '还原' : '最大化'}>
-          {maximized
-            ? <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="0" width="9" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/><rect x="0" y="2.5" width="9" height="9" rx="1" fill="var(--bg-primary)" stroke="currentColor" strokeWidth="1.2"/></svg>
-            : <svg width="12" height="12" viewBox="0 0 12 12"><rect x="0.5" y="0.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg>
-          }
-        </button>
-        <button className="tb-btn tb-close" onClick={() => window.api.window?.close?.()} title="关闭">
-          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// 设置折叠面板
-function SettingsSection({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className={`settings-section${open ? ' open' : ''}`}>
-      <div className="settings-section-header" onClick={() => setOpen(!open)}>
-        <span className="settings-section-title">{title}</span>
-        <svg className="settings-section-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M5 7l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </div>
-      {open && <div className="settings-section-body">{children}</div>}
-    </div>
-  );
-}
-
-export default function App() {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string>('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [view, setView] = useState<'chat' | 'settings'>('chat');
-  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
-  const [configSaved, setConfigSaved] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<ToolConfirmRequest | null>(null);
-  const [streamingDeltas, setStreamingDeltas] = useState<Record<string, string>>({});
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // 更新状态
-  const [updateState, setUpdateState] = useState<UpdateState>('idle');
-  const [updateVersion, setUpdateVersion] = useState('');
-  const [updateProgress, setUpdateProgress] = useState(0);
-  const [updateError, setUpdateError] = useState('');
-
-  // LLM 测试连接
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'fail'>('idle');
-  const [testResult, setTestResult] = useState<{ latency?: number; model?: string; error?: string } | null>(null);
-
-  // Skill 管理
-  const [skillList, setSkillList] = useState<SkillInfo[]>([]);
-  const [showCreateSkill, setShowCreateSkill] = useState(false);
-  const [newSkill, setNewSkill] = useState({ name: '', trigger: '', description: '', type: 'declarative' as 'declarative' | 'code', systemPrompt: '' });
-  const [skillCreating, setSkillCreating] = useState(false);
-
-  // Agent 管理
-  const [agentList, setAgentList] = useState<AgentConfig[]>([]);
-  const [activeAgentId, setActiveAgentId] = useState<string>('default-agent');
-  const [showAgentModal, setShowAgentModal] = useState(false);
-  const [showAgentSkillsModal, setShowAgentSkillsModal] = useState(false);
-  const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
-  const [newAgent, setNewAgent] = useState<CreateAgentRequest>({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
-  const [agentCreating, setAgentCreating] = useState(false);
-  const [agentUpdating, setAgentUpdating] = useState(false);
-
-  useEffect(() => { loadInitialData(); setupStreamListener(); setupConfirmListener(); setupUpdateListener(); }, []);
-  useEffect(() => { if (activeSessionId) loadMessages(activeSessionId); }, [activeSessionId]);
-  useEffect(() => { scrollToBottom(); }, [messages, streamingDeltas]);
-  useEffect(() => { if (view === 'settings') loadSkillList(); }, [view]);
-
-  async function loadInitialData() {
-    try {
-      const s = await window.api.session.list();
-      setSessions(s);
-      if (s.length > 0) setActiveSessionId(s[0].id);
-      const llm = await window.api.llm.getConfig();
-      setLlmConfig(llm);
-      if (!llm.apiKey) setView('settings');
-      await loadAgentList();
-    } catch (e) { console.error(e); }
-  }
-
-  function setupStreamListener() {
-    window.api.chat.onStream(({ messageId, delta, done }) => {
-      setStreamingDeltas((prev) => {
-        const next = { ...prev };
-        if (!done) next[messageId] = (next[messageId] || '') + delta;
-        else delete next[messageId];
-        return next;
+  // Stream listener
+  useEffect(() => {
+    window.api.chat.onStream((chunk) => {
+      if (chunk.done) {
+        setIsLoading(false);
+        return;
+      }
+      setMessages(prev => {
+        const existing = prev.find(m => m.id === chunk.messageId);
+        if (existing) {
+          return prev.map(m => m.id === chunk.messageId ? { ...m, content: m.content + chunk.delta } : m);
+        } else {
+          return [...prev, { id: chunk.messageId, role: 'assistant', content: chunk.delta, sessionId: activeSessionId || '' } as ChatMessage];
+        }
       });
     });
-  }
+  }, [activeSessionId]);
 
-  function setupConfirmListener() { window.api.tools.onConfirm((req) => setPendingConfirm(req)); }
+  // Tool confirm listener
+  useEffect(() => {
+    window.api.tools.onConfirm((req) => setConfirmReq(req));
+  }, []);
 
-  function setupUpdateListener() {
-    window.api.updater.onUpdateAvailable((info) => {
-      setUpdateState('available');
-      setUpdateVersion(info.version);
-    });
-    window.api.updater.onUpdateNotAvailable(() => {
-      // 仅手动检查时显示"已是最新"
-      setUpdateState((prev) => prev === 'checking' ? 'up-to-date' : 'idle');
-    });
-    window.api.updater.onProgress((progress) => {
-      setUpdateState('downloading');
-      setUpdateProgress(progress.percent);
-    });
-    window.api.updater.onDownloaded((info) => {
-      setUpdateState('downloaded');
-      setUpdateVersion(info.version);
-    });
-    window.api.updater.onError((err) => {
-      setUpdateState('error');
-      setUpdateError(err);
-    });
-  }
+  // Scroll to bottom
+  useEffect(() => {
+    if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [messages]);
 
-  async function loadMessages(sessionId: string) {
-    try { setMessages(await window.api.message.list(sessionId)); } catch (e) { console.error(e); }
-  }
+  // Update listener
+  useEffect(() => {
+    const unsubs: (() => void)[] = [];
+    unsubs.push(window.api.updater.onUpdateAvailable((info) => setUpdateState({ status: 'available', version: info.version })));
+    unsubs.push(window.api.updater.onUpdateNotAvailable(() => setUpdateState({ status: 'up-to-date' })));
+    unsubs.push(window.api.updater.onProgress((p) => setUpdateState(prev => ({ ...prev, status: 'downloading', progress: p.percent }))));
+    unsubs.push(window.api.updater.onDownloaded((info) => setUpdateState({ status: 'downloaded', version: info.version })));
+    unsubs.push(window.api.updater.onError((err) => setUpdateState({ status: 'error' })));
+    return () => unsubs.forEach(fn => fn());
+  }, []);
 
-  async function handleNewSession() {
-    try {
-      const title = '新对话 ' + new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const s = await window.api.session.create(title, activeAgentId);
-      setSessions((prev) => [s, ...prev]);
-      setActiveSessionId(s.id);
-      setMessages([]);
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleDeleteSession(sessionId: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!confirm('确定删除这个对话？')) return;
-    try {
-      await window.api.session.delete(sessionId);
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      if (activeSessionId === sessionId) {
-        const remaining = sessions.filter((s) => s.id !== sessionId);
-        setActiveSessionId(remaining.length > 0 ? remaining[0].id : '');
-      }
-    } catch (err) { console.error(err); }
-  }
-
-  async function handleSend() {
-    if (!inputText.trim() || isLoading) return;
-    if (!activeSessionId) { await handleNewSession(); return; }
-    const text = inputText.trim();
-    setInputText('');
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input.trim(), sessionId: activeSessionId || '' };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
     setIsLoading(true);
-
-    // /command 解析
-    if (text.startsWith('/')) {
-      const parts = text.slice(1).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-      if (parts.length > 0) {
-        const cmd = parts[0].toLowerCase();
-        try {
-          const skills: SkillInfo[] = await window.api.skill.list();
-          const matched = skills.find((s) => {
-            const triggerCmd = s.trigger.replace(/^\//, '').toLowerCase();
-            return triggerCmd === cmd || triggerCmd === cmd.replace(/-/g, '');
-          });
-          if (matched) {
-            const args: Record<string, string> = {};
-            (matched.parameters || []).forEach((p, i) => {
-              args[p.name] = parts[i + 1]?.replace(/^["']|["']$/g, '') || p.default || '';
-            });
-            const result = await window.api.skill.execute(matched.id, args);
-            const userMsg: ChatMessage = { id: 'u_' + Date.now(), sessionId: activeSessionId, role: 'user', content: text, createdAt: new Date().toISOString() };
-            const assistantContent = result.success ? result.output || '执行完成' : `执行失败: ${result.error}`;
-            const assistantMsg: ChatMessage = { id: 'a_' + Date.now(), sessionId: activeSessionId, role: 'assistant', content: assistantContent, createdAt: new Date().toISOString() };
-            setMessages((prev) => [...prev, userMsg, assistantMsg]);
-            setIsLoading(false);
-            return;
-          }
-        } catch (e) { console.error('Skill 执行错误:', e); }
+    try {
+      let sid = activeSessionId;
+      if (!sid) {
+        const s = await window.api.session.create(input.trim().slice(0, 40) || 'New Chat');
+        setSessions(prev => [s, ...prev]);
+        setActiveSessionId(s.id);
+        sid = s.id;
+        setView('chat');
       }
+      await window.api.chat.send({ sessionId: sid, message: userMsg.content, agentId: activeAgentId });
+    } catch (e: any) {
+      setIsLoading(false);
+      setError(e.message || 'Send failed');
     }
+  };
 
+  const createSession = async () => {
+    const s = await window.api.session.create('New Chat');
+    setSessions(prev => [s, ...prev]);
+    setActiveSessionId(s.id);
+    setMessages([]);
+    setView('chat');
+  };
+
+  const deleteSession = async (id: string) => {
+    await window.api.session.delete(id);
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSessionId === id) {
+      setActiveSessionId(null);
+      setMessages([]);
+      if (sessions.length < 2) setView('welcome');
+    }
+  };
+
+  const selectSession = async (id: string) => {
+    setActiveSessionId(id);
+    const msgs = await window.api.message.list(id).catch(() => []);
+    setMessages(msgs);
+    setView('chat');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  // ---- Settings Drawer Navigation ----
+  const navigateSetting = (setting: string, level: 1 | 2 = 1) => {
+    setActiveSetting(setting);
+    setDrawerLevel(level);
+    setDrawerStack(prev => [...prev.slice(0, level - 1), { level, setting, data: null }]);
+  };
+
+  const pushDrawer = (setting: string, data?: any) => {
+    const nextLevel = Math.min((drawerLevel + 1) as 1 | 2 | 3, 3);
+    setDrawerLevel(nextLevel);
+    setActiveSetting(setting);
+    setDrawerStack(prev => [...prev, { level: nextLevel, setting, data }]);
+  };
+
+  const popDrawer = () => {
+    if (drawerStack.length <= 1) return;
+    const newStack = drawerStack.slice(0, -1);
+    setDrawerStack(newStack);
+    const prev = newStack[newStack.length - 1];
+    setDrawerLevel(prev.level);
+    setActiveSetting(prev.setting);
+  };
+
+  // ---- Agent actions ----
+  const loadAgents = async () => {
+    const ag = await window.api.agent?.list().catch(() => []) || [];
+    setAgents(ag);
+  };
+
+  const saveAgent = async (agent: any) => {
+    if (editingAgent) {
+      await window.api.agent?.update(agent.id, agent);
+    } else {
+      await window.api.agent?.create(agent);
+    }
+    setEditingAgent(null);
+    setShowAgentModal(false);
+    loadAgents();
+  };
+
+  const deleteAgent = async (id: string) => {
+    await window.api.agent?.delete(id);
+    loadAgents();
+    if (activeAgentId === id) setActiveAgentId('default');
+  };
+
+  const toggleSkillForAgent = async (agentId: string, skillId: string) => {
+    await window.api.agent?.toggleSkill(agentId, skillId);
+    loadAgents();
+  };
+
+  // ---- Skill actions ----
+  const loadSkills = async () => {
+    const sk = await window.api.skill.list().catch(() => []);
+    setLocalSkills(sk);
+  };
+
+  const saveSkill = async (skill: any) => {
+    if (editingSkill) {
+      await window.api.skill.save(skill.id, skill);
+    } else if (skill.systemPrompt) {
+      await window.api.skill.create({ name: skill.name, description: skill.description, id: skill.id, systemPrompt: skill.systemPrompt });
+    } else {
+      await window.api.skill.create(skill);
+    }
+    setEditingSkill(null);
+    setShowSkillModal(false);
+    loadSkills();
+  };
+
+  const deleteSkill = async (id: string) => {
+    await window.api.skill.delete(id);
+    loadSkills();
+  };
+
+  // ---- Marketplace ----
+  const searchMarketplace = async (query: string) => {
+    setMarketplaceLoading(true);
+    setMarketplaceQuery(query);
     try {
-      const userMsg: ChatMessage = { id: 'u_' + Date.now(), sessionId: activeSessionId, role: 'user', content: text, createdAt: new Date().toISOString() };
-      setMessages((prev) => [...prev, userMsg]);
-      const assistantMsg: ChatMessage = { id: 'a_' + Date.now(), sessionId: activeSessionId, role: 'assistant', content: '', createdAt: new Date().toISOString() };
-      setMessages((prev) => [...prev, assistantMsg]);
-      await window.api.chat.send({ sessionId: activeSessionId, message: text, agentId: activeAgentId });
-      await loadMessages(activeSessionId);
-    } catch (e) { console.error(e); } finally { setIsLoading(false); }
-  }
+      const results = await window.api.skill.marketplace.search(query);
+      setMarketplaceSkills(results);
+    } catch (e: any) {
+      setMarketplaceSkills([{ error: e.message }]);
+    }
+    setMarketplaceLoading(false);
+  };
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-  }
+  const installMarketplaceSkill = async (skill: any) => {
+    const result = await window.api.skill.marketplace.install(skill.id, skill.name);
+    if (result.success) {
+      loadSkills();
+      searchMarketplace(marketplaceQuery);
+    }
+    return result;
+  };
 
-  function handleConfirm(approved: boolean) {
-    if (!pendingConfirm) return;
-    window.api.tools.respondConfirm(pendingConfirm.messageId, approved);
-    setPendingConfirm(null);
-  }
+  // ---- Scroll into view ----
+  const settingsRef = useRef<HTMLDivElement>(null);
 
-  async function handleSaveLlmConfig() {
-    if (!llmConfig) return;
-    try {
-      const ok = await window.api.llm.saveConfig(llmConfig);
-      if (ok) { setConfigSaved(true); setTimeout(() => setConfigSaved(false), 2000); }
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleTestConnection() {
-    if (!llmConfig) return;
-    setTestStatus('testing');
+  // ---- LLM Test ----
+  const testConnection = async () => {
+    setTestLoading(true);
     setTestResult(null);
     try {
-      const result = await window.api.llm.testConnection(llmConfig);
-      setTestResult(result);
-      setTestStatus(result.success ? 'success' : 'fail');
+      const r = await window.api.llm.testConnection(llmConfig);
+      setTestResult({ ok: r.success, msg: r.success ? `✓ Connected (${r.model || ''}, ${r.latency?.toFixed(0)}ms)` : `✗ ${r.error || 'Failed'}` });
     } catch (e: any) {
-      setTestResult({ error: e.message });
-      setTestStatus('fail');
+      setTestResult({ ok: false, msg: `✗ ${e.message}` });
     }
-  }
+    setTestLoading(false);
+  };
 
-  async function handleCheckUpdate() {
-    setUpdateState('checking');
-    try {
-      const result = await window.api.updater.check();
-      if (result.error) {
-        setUpdateState('error');
-        setUpdateError(result.error);
-      } else if (result.available) {
-        setUpdateState('available');
-        setUpdateVersion(result.version || '');
-      } else {
-        setUpdateState('up-to-date');
-      }
-    } catch { setUpdateState('idle'); }
-  }
-
-  async function loadSkillList() {
-    try { setSkillList(await window.api.skill.list()); } catch (e) { console.error(e); }
-  }
-
-  async function handleDeleteSkill(skillId: string) {
-    if (!confirm('确定删除这个 Skill？')) return;
-    try {
-      await window.api.skill.delete(skillId);
-      await loadSkillList();
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleCreateSkill() {
-    if (!newSkill.name.trim()) return;
-    setSkillCreating(true);
-    try {
-      const id = newSkill.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const trigger = newSkill.trigger || ('/' + id);
-      await window.api.skill.create({
-        id,
-        name: newSkill.name.trim(),
-        description: newSkill.description,
-        trigger: trigger.startsWith('/') ? trigger : '/' + trigger,
-        type: newSkill.type,
-        tools: [],
-        parameters: [],
-        enabled: true,
-        source: 'local',
-        systemPrompt: newSkill.systemPrompt,
-      });
-      setNewSkill({ name: '', trigger: '', description: '', type: 'declarative', systemPrompt: '' });
-      setShowCreateSkill(false);
-      await loadSkillList();
-    } catch (e) { console.error(e); } finally { setSkillCreating(false); }
-  }
-
-  function scrollToBottom() { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }
-
-  // Agent 管理函数
-  async function loadAgentList() {
-    try { setAgentList(await window.api.agent.list()); } catch (e) { console.error(e); }
-  }
-
-  async function handleCreateAgent() {
-    if (!newAgent.name.trim()) return;
-    setAgentCreating(true);
-    try {
-      await window.api.agent.create(newAgent);
-      setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
-      setShowAgentModal(false);
-      await loadAgentList();
-    } catch (e) { console.error(e); } finally { setAgentCreating(false); }
-  }
-
-  async function handleUpdateAgent() {
-    if (!editingAgent || !newAgent.name.trim()) return;
-    setAgentUpdating(true);
-    try {
-      await window.api.agent.update(editingAgent.id, newAgent);
-      setEditingAgent(null);
-      setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
-      setShowAgentModal(false);
-      await loadAgentList();
-    } catch (e) { console.error(e); } finally { setAgentUpdating(false); }
-  }
-
-  async function handleDeleteAgent(agentId: string) {
-    if (agentId === 'default-agent') return;
-    if (!confirm('确定删除这个 Agent？所有相关对话和记忆将被删除。')) return;
-    try {
-      await window.api.agent.delete(agentId);
-      if (activeAgentId === agentId) setActiveAgentId('default-agent');
-      await loadAgentList();
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleToggleAgentSkill(agentId: string, skillId: string) {
-    try {
-      await window.api.agent.toggleSkill(agentId, skillId);
-      await loadAgentList();
-    } catch (e) { console.error(e); }
-  }
-
-  function openEditAgent(agent: AgentConfig) {
-    setEditingAgent(agent);
-    setNewAgent({
-      name: agent.name,
-      description: agent.description || '',
-      model: agent.model,
-      systemPrompt: agent.systemPrompt,
-      temperature: agent.temperature,
-      tools: agent.tools
-    });
-    setShowAgentModal(true);
-  }
-
-  function openAgentSkills(agent: AgentConfig) {
-    setEditingAgent(agent);
-    setShowAgentSkillsModal(true);
-  }
-
-  function renderMessage(msg: ChatMessage, index: number) {
-    if (msg.role === 'tool') {
-      return (
-        <div key={msg.id || 'tool_' + index} className="msg msg-tool">
-          <div className="msg-tool-card">
-            <div className="tool-badge">TOOL</div>
-            {msg.content}
-          </div>
-        </div>
-      );
-    }
-    const isStreaming = !!streamingDeltas[msg.id];
-    const content = msg.content || streamingDeltas[msg.id] || msg.content;
-
-    return (
-      <div key={msg.id || index} className={`msg msg-${msg.role}`}>
-        <div className={`msg-avatar msg-avatar-${msg.role}`}>
-          {msg.role === 'user' ? 'U' : 'A'}
-        </div>
-        <div className="msg-body">
-          <div className={`msg-bubble${isStreaming && !msg.content ? ' typing' : ''}`}>
-            {content || (isStreaming ? '' : '...')}
-          </div>
-          {msg.toolCalls && msg.toolCalls.length > 0 && (
-            <div className="msg-tool-card">
-              <div className="tool-badge">CALL</div>
-              {msg.toolCalls.map((tc, i) => (
-                <div key={i} className="tool-call-item">
-                  <span className="tool-name">{tc.name}</span>
-                  <span className="tool-args">
-                    {Object.entries(tc.arguments || {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  const activeTitle = sessions.find((s) => s.id === activeSessionId)?.title || 'AppClaw';
-
+  // ---- Render ----
   return (
     <div className="app">
-      <TitleBar title={view === 'settings' ? 'AppClaw - 设置' : activeTitle} />
-
-      {/* 更新提示条 */}
-      {updateState === 'available' && (
-        <div className="update-bar">
-          <span>发现新版本 v{updateVersion}</span>
-          <button className="update-btn" onClick={() => { window.api.updater.download(); setUpdateState('downloading'); setUpdateProgress(0); }}>立即下载</button>
-          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>稍后</button>
-        </div>
-      )}
-      {updateState === 'downloading' && (
-        <div className="update-bar downloading">
-          <span>正在下载更新 {updateProgress}%</span>
-          <div className="progress-track"><div className="progress-fill" style={{ width: `${updateProgress}%` }} /></div>
-        </div>
-      )}
-      {updateState === 'downloaded' && (
-        <div className="update-bar downloaded">
-          <span>v{updateVersion} 已就绪</span>
-          <button className="update-btn" onClick={() => window.api.updater.install()}>重启安装</button>
-        </div>
-      )}
-      {updateState === 'error' && (
-        <div className="update-bar error">
-          <span>更新失败: {updateError}</span>
-          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>关闭</button>
-        </div>
-      )}
-      {updateState === 'up-to-date' && (
-        <div className="update-bar up-to-date">
-          <span>已是最新版本 v{__APP_VERSION__}</span>
-          <button className="update-dismiss" onClick={() => setUpdateState('idle')}>关闭</button>
-        </div>
-      )}
-
-      <div className="app-body">
-        {/* 侧栏 */}
-        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
-          <div className="sidebar-head">
-            {!sidebarCollapsed && <span className="logo-text">AppClaw</span>}
-            <button className="icon-btn" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} title={sidebarCollapsed ? '展开' : '收起'}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d={sidebarCollapsed ? 'M6 3l5 5-5 5' : 'M10 3L5 8l5 5'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </button>
-            {!sidebarCollapsed && (
-              <button className="icon-btn" onClick={handleNewSession} title="新对话">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
-            )}
+      {/* Title Bar */}
+      <div className="titlebar">
+        <div className="titlebar-drag">
+          <div className="titlebar-brand">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#6c8cff' }}>
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+            </svg>
+            <span className="titlebar-title">AppClaw</span>
           </div>
-
-          {!sidebarCollapsed && (
-            <>
-              <div className="sidebar-label">对话</div>
-              <div className="session-list">
-                {sessions.map((s) => (
-                  <div key={s.id} className={`session-item${s.id === activeSessionId ? ' active' : ''}`} onClick={() => setActiveSessionId(s.id)}>
-                    <span className="session-title">{s.title}</span>
-                    <button className="session-del" onClick={(e) => handleDeleteSession(s.id, e)}>
-                      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-                    </button>
-                  </div>
-                ))}
-                {sessions.length === 0 && <div className="empty-hint">暂无对话</div>}
-              </div>
-            </>
-          )}
-
-          <div className="sidebar-foot">
-            <button className={`foot-btn${view === 'settings' ? ' active' : ''}`} onClick={() => setView(view === 'settings' ? 'chat' : 'settings')}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.2"/><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.1 3.1l.7.7M12.2 12.2l.7.7M3.1 12.9l.7-.7M12.2 3.8l.7-.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-              {!sidebarCollapsed && <span>设置</span>}
-            </button>
-          </div>
-        </aside>
-
-        {/* 主区域 */}
-        <main className="main">
-          {view === 'settings' ? (
-            <div className="settings">
-              <h2 className="settings-heading">设置</h2>
-
-              <SettingsSection title="大模型配置" defaultOpen={!llmConfig?.apiKey}>
-                <div className="field">
-                  <label>API 提供商</label>
-                  <input value={llmConfig?.provider || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, provider: e.target.value as LLMConfig['provider'] })} placeholder="openai / anthropic / deepseek" />
-                </div>
-                <div className="field">
-                  <label>API Key</label>
-                  <input type="password" value={llmConfig?.apiKey || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, apiKey: e.target.value })} placeholder="sk-..." />
-                </div>
-                <div className="field-row">
-                  <div className="field"><label>模型名称</label><input value={llmConfig?.model || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, model: e.target.value })} placeholder="gpt-4o-mini" /></div>
-                  <div className="field"><label>Base URL</label><input value={llmConfig?.baseUrl || ''} onChange={(e) => setLlmConfig({ ...llmConfig!, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" /></div>
-                </div>
-                <div className="btn-row">
-                  <button className={`btn-primary${configSaved ? ' btn-saved' : ''}`} onClick={handleSaveLlmConfig}>{configSaved ? '已保存' : '保存配置'}</button>
-                  <button className={`btn-test${testStatus === 'success' ? ' test-ok' : testStatus === 'fail' ? ' test-fail' : ''}`} onClick={handleTestConnection} disabled={testStatus === 'testing' || !llmConfig?.apiKey}>
-                    {testStatus === 'testing' ? '测试中...' : testStatus === 'success' ? '连接成功' : testStatus === 'fail' ? '连接失败' : '测试连接'}
-                  </button>
-                </div>
-                {testResult && (
-                  <div className={`test-result${testResult.error ? ' test-fail' : ' test-ok'}`}>
-                    {testResult.error
-                      ? `错误: ${testResult.error}`
-                      : `连接成功! 模型: ${testResult.model}, 延迟: ${testResult.latency}ms`
-                    }
-                  </div>
-                )}
-              </SettingsSection>
-
-              <SettingsSection title="检查更新">
-                <div className="update-section">
-                  <span className="update-info">当前版本: {__APP_VERSION__}</span>
-                  <button className="btn-primary" onClick={handleCheckUpdate} disabled={updateState === 'checking'}>
-                    {updateState === 'checking' ? '检查中...' : '检查更新'}
-                  </button>
-                </div>
-              </SettingsSection>
-
-              <SettingsSection title="Skills">
-                <div className="skill-list">
-                  {skillList.length === 0 ? (
-                    <div className="empty-hint">暂无已安装的 Skills</div>
-                  ) : (
-                    skillList.map((skill) => (
-                      <div key={skill.id} className="skill-item">
-                        <div className="skill-info">
-                          <div className="skill-name">
-                            {skill.name}
-                            <span className="skill-type">{skill.type}</span>
-                          </div>
-                          <div className="skill-desc">{skill.description}</div>
-                          <div className="skill-trigger">触发命令: {skill.trigger}</div>
-                        </div>
-                        <button className="skill-del" onClick={() => handleDeleteSkill(skill.id)} title="删除">
-                          <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-                {showCreateSkill ? (
-                  <div className="skill-create-form">
-                    <div className="field">
-                      <label>Skill 名称</label>
-                      <input value={newSkill.name} onChange={(e) => setNewSkill({ ...newSkill, name: e.target.value })} placeholder="例如：代码审查" />
-                    </div>
-                    <div className="field-row">
-                      <div className="field">
-                        <label>触发命令</label>
-                        <input value={newSkill.trigger} onChange={(e) => setNewSkill({ ...newSkill, trigger: e.target.value })} placeholder="/code-review" />
-                      </div>
-                      <div className="field">
-                        <label>类型</label>
-                        <select value={newSkill.type} onChange={(e) => setNewSkill({ ...newSkill, type: e.target.value as 'declarative' | 'code' })}>
-                          <option value="declarative">声明式 (提示词)</option>
-                          <option value="code">代码式 (JS)</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="field">
-                      <label>描述</label>
-                      <input value={newSkill.description} onChange={(e) => setNewSkill({ ...newSkill, description: e.target.value })} placeholder="简要描述这个 Skill 的功能" />
-                    </div>
-                    <div className="field">
-                      <label>系统提示词</label>
-                      <textarea value={newSkill.systemPrompt} onChange={(e) => setNewSkill({ ...newSkill, systemPrompt: e.target.value })} placeholder="当触发此 Skill 时，会注入到对话上下文的系统提示词..." rows={4} />
-                    </div>
-                    <div className="btn-row">
-                      <button className="btn-primary" onClick={handleCreateSkill} disabled={skillCreating || !newSkill.name.trim()}>
-                        {skillCreating ? '创建中...' : '创建 Skill'}
-                      </button>
-                      <button className="btn-cancel" onClick={() => setShowCreateSkill(false)}>取消</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="btn-row">
-                    <button className="btn-primary" onClick={() => setShowCreateSkill(true)}>创建 Skill</button>
-                  </div>
-                )}
-                <p className="skill-hint">提示：在对话中输入 <code>/命令</code> 即可触发 Skill</p>
-              </SettingsSection>
-
-              <SettingsSection title="Agents">
-                <div className="agent-list">
-                  {agentList.length === 0 ? (
-                    <div className="empty-hint">暂无 Agents</div>
-                  ) : (
-                    agentList.map((agent) => (
-                      <div key={agent.id} className="agent-item">
-                        <div className="agent-info">
-                          <div className="agent-name">
-                            {agent.name}
-                            {agent.id === 'default-agent' && <span className="agent-default">默认</span>}
-                          </div>
-                          <div className="agent-desc">{agent.description || '暂无描述'}</div>
-                          <div className="agent-model">{agent.model}</div>
-                          {agent.skills && agent.skills.length > 0 && (
-                            <div className="agent-skills">
-                              <span>已关联 Skills:</span>
-                              {agent.skills.map((skillName) => (
-                                <span key={skillName} className="agent-skill-tag">{skillName}</span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="agent-actions">
-                          <button className="agent-btn agent-btn-skills" onClick={() => openAgentSkills(agent)} title="管理 Skills">
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                          </button>
-                          {agent.id !== 'default-agent' && (
-                            <button className="agent-btn agent-btn-edit" onClick={() => openEditAgent(agent)} title="编辑">
-                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M12 2H6a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V4a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.2"/><path d="M9 2v5h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                            </button>
-                          )}
-                          {agent.id !== 'default-agent' && (
-                            <button className="agent-btn agent-btn-del" onClick={() => handleDeleteAgent(agent.id)} title="删除">
-                              <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="btn-row">
-                  <button className="btn-primary" onClick={() => { setEditingAgent(null); setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] }); setShowAgentModal(true); }}>创建 Agent</button>
-                </div>
-              </SettingsSection>
-
-              <SettingsSection title="关于 AppClaw">
-                <p className="about-text">桌面端 AI 助手，支持对话式交互、文件系统读写、浏览器搜索、命令行执行、启动桌面程序，以及长期记忆（PGlite 本地存储）。所有数据保存在 ~/.appclaw/ 目录下。</p>
-              </SettingsSection>
-            </div>
-          ) : (
-            <>
-              <div className="chat-top">
-                <div className="chat-top-title">{activeTitle}</div>
-                <div className="chat-top-right">
-                  <div className="agent-selector">
-                    <select value={activeAgentId} onChange={(e) => setActiveAgentId(e.target.value)}>
-                      {agentList.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
-                    <button className="agent-settings-btn" onClick={() => setView('settings')} title="管理 Agents">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.2"/><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                    </button>
-                  </div>
-                  <div className={`status-dot${llmConfig?.apiKey ? ' on' : ''}`}>
-                    <span className="dot" />
-                    {llmConfig?.apiKey ? `${llmConfig.model || '已连接'}` : '未配置'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="messages">
-                {messages.length === 0 ? (
-                  <div className="welcome">
-                    <div className="welcome-icon">
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="url(#wg)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><defs><linearGradient id="wg" x1="2" y1="2" x2="22" y2="22"><stop stopColor="#6c8cff"/><stop offset="1" stopColor="#a78bfa"/></linearGradient></defs></svg>
-                    </div>
-                    <h2>你好，我是 AppClaw</h2>
-                    <p>一个能调用你电脑的桌面 AI 助手</p>
-                    <div className="chips">
-                      {SUGGESTIONS.map((s, i) => (
-                        <button key={i} className="chip" onClick={() => setInputText(s)}>{s}</button>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {messages.map((msg, idx) => renderMessage(msg, idx))}
-                    {pendingConfirm && (
-                      <div className="msg msg-assistant">
-                        <div className="msg-avatar msg-avatar-assistant">A</div>
-                        <div className="msg-body">
-                          <div className="confirm-card">
-                            <div className="confirm-title">需要你的确认</div>
-                            <div className="confirm-body">{pendingConfirm.preview}</div>
-                            <div className="confirm-btns">
-                              <button className="btn-allow" onClick={() => handleConfirm(true)}>允许执行</button>
-                              <button className="btn-deny" onClick={() => handleConfirm(false)}>拒绝</button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
-              </div>
-
-              <div className="input-area">
-                <div className="input-box">
-                  <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={handleKeyDown} placeholder="输入消息，Enter 发送..." rows={1} />
-                  <button className="send-btn" onClick={handleSend} disabled={isLoading || !inputText.trim()}>
-                    <svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M2 8l12-6-6 12V8H2z" fill="currentColor"/></svg>
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </main>
+        </div>
+        <div className="titlebar-controls">
+          <button className="tb-btn" onClick={() => window.api.window.minimize()}>
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          </button>
+          <button className="tb-btn" onClick={() => window.api.window.maximize()}>
+            <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>
+          </button>
+          <button className="tb-btn tb-close" onClick={() => window.api.window.close()}>
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          </button>
+        </div>
       </div>
 
-      {/* Agent 创建/编辑 模态框 */}
-      {showAgentModal && (
-        <div className="modal-overlay" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{editingAgent ? '编辑 Agent' : '创建 Agent'}</h3>
-              <button className="modal-close" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>
-                <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
+      <div className="app-body">
+        {/* Sidebar */}
+        <div className="sidebar">
+          <div className="sidebar-head">
+            <span className="logo-text">AppClaw</span>
+            <button className="icon-btn" title="New Chat" onClick={createSession}>
+              <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            </button>
+          </div>
+          <div className="sidebar-label">Sessions</div>
+          <div className="session-list">
+            {sessions.length === 0 && <div className="empty-hint">No sessions yet</div>}
+            {sessions.map(s => (
+              <div key={s.id} className={`session-item ${activeSessionId === s.id ? 'active' : ''}`} onClick={() => selectSession(s.id)}>
+                <span className="session-title">{s.title || 'Untitled'}</span>
+                <button className="session-del" onClick={e => { e.stopPropagation(); deleteSession(s.id); }}>
+                  <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="sidebar-foot">
+            <button className={`foot-btn ${showSettings ? 'active' : ''}`} onClick={() => { setShowSettings(!showSettings); setView('settings' as any); }}>
+              <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M13.5 8a5.5 5.5 0 01-.3 1.8l1.3 1-1 1.7-1.5-.6a5.5 5.5 0 01-1.6.9L10 14H8.5l-.4-1.6a5.5 5.5 0 01-1.6-.9l-1.5.6-1-1.7 1.3-1A5.5 5.5 0 014.5 8a5.5 5.5 0 01.3-1.8l-1.3-1 1-1.7 1.5.6a5.5 5.5 0 011.6-.9L8.5 2H10l.4 1.6a5.5 5.5 0 011.6.9l1.5-.6 1 1.7-1.3 1A5.5 5.5 0 0113.5 8z" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
+              Settings
+            </button>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="main" style={showSettings ? { padding: 0, overflow: 'hidden' } : {}}>
+          {/* Update Bar */}
+          {updateState.status === 'available' && (
+            <div className="update-bar">
+              <span>Update v{updateState.version} available</span>
+              <button className="update-btn" onClick={() => window.api.updater.download()}>Download</button>
+              <button className="update-dismiss" onClick={() => setUpdateState({ status: 'idle' })}>Dismiss</button>
             </div>
-            <div className="modal-body">
-              <div className="field">
-                <label>Agent 名称</label>
-                <input value={newAgent.name} onChange={(e) => setNewAgent({ ...newAgent, name: e.target.value })} placeholder="例如：办公助手" />
+          )}
+          {updateState.status === 'downloading' && (
+            <div className="update-bar downloading">
+              <span>Downloading update...</span>
+              <div className="progress-track"><div className="progress-fill" style={{ width: `${updateState.progress || 0}%` }} /></div>
+              <span>{updateState.progress?.toFixed(0)}%</span>
+            </div>
+          )}
+          {updateState.status === 'downloaded' && (
+            <div className="update-bar downloaded">
+              <span>Update ready</span>
+              <button className="update-btn" onClick={() => window.api.updater.install()}>Install & Restart</button>
+            </div>
+          )}
+          {updateState.status === 'error' && (
+            <div className="update-bar error">
+              <span>Update check failed</span>
+              <button className="update-dismiss" onClick={() => setUpdateState({ status: 'idle' })}>Dismiss</button>
+            </div>
+          )}
+          {updateState.status === 'up-to-date' && (
+            <div className="update-bar up-to-date">
+              <span>App is up to date</span>
+              <button className="update-dismiss" onClick={() => setUpdateState({ status: 'idle' })}>Dismiss</button>
+            </div>
+          )}
+
+          {showSettings ? (
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              {/* ===== Settings Drawer Layer 1: Navigation ===== */}
+              <div style={{
+                width: 200, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)',
+                display: 'flex', flexDirection: 'column', flexShrink: 0
+              }}>
+                <div style={{ padding: '20px 16px 12px', fontSize: 14, fontWeight: 700 }}>Settings</div>
+                {[
+                  { key: 'llm', label: 'LLM Config', icon: 'M12 2L2 7l10 5 10-5-10-5z' },
+                  { key: 'agents', label: 'Agents', icon: 'M12 12a4 4 0 100-8 4 4 0 000 8z M2 21v-2a6 6 0 0112 0v2' },
+                  { key: 'skills', label: 'Skills', icon: 'M9 11l3-3 3 3 M12 2v8' },
+                  { key: 'updates', label: 'Updates', icon: 'M12 2v4M12 22v-4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M22 12h-4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83' },
+                  { key: 'about', label: 'About', icon: 'M12 12c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z M12 14c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z' },
+                ].map(item => (
+                  <button key={item.key}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', width: '100%',
+                      textAlign: 'left', fontSize: 13, color: activeSetting === item.key ? 'var(--accent)' : 'var(--text-secondary)',
+                      background: activeSetting === item.key ? 'var(--accent-glow)' : 'transparent',
+                      borderRight: activeSetting === item.key ? '2px solid var(--accent)' : '2px solid transparent',
+                      transition: 'all var(--transition-fast)'
+                    }}
+                    onClick={() => navigateSetting(item.key)}
+                    onMouseEnter={e => { if (activeSetting !== item.key) (e.target as HTMLElement).style.background = 'var(--bg-hover)'; }}
+                    onMouseLeave={e => { if (activeSetting !== item.key) (e.target as HTMLElement).style.background = 'transparent'; }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d={item.icon} />
+                    </svg>
+                    {item.label}
+                  </button>
+                ))}
               </div>
-              <div className="field">
-                <label>描述</label>
-                <input value={newAgent.description} onChange={(e) => setNewAgent({ ...newAgent, description: e.target.value })} placeholder="简要描述这个 Agent 的功能" />
-              </div>
-              <div className="field">
-                <label>模型</label>
-                <input value={newAgent.model} onChange={(e) => setNewAgent({ ...newAgent, model: e.target.value })} placeholder="gpt-4o-mini" />
-              </div>
-              <div className="field">
-                <label>温度</label>
-                <input type="number" step="0.1" min="0" max="2" value={newAgent.temperature} onChange={(e) => setNewAgent({ ...newAgent, temperature: parseFloat(e.target.value) })} />
-              </div>
-              <div className="field">
-                <label>系统提示词</label>
-                <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent({ ...newAgent, systemPrompt: e.target.value })} placeholder="设置这个 Agent 的角色和行为..." rows={6} />
-              </div>
-              <div className="field">
-                <label>可用工具（逗号分隔）</label>
-                <input value={newAgent.tools.join(',')} onChange={(e) => setNewAgent({ ...newAgent, tools: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })} placeholder="file_read, file_write, web_search, run_command, open_app" />
+
+              {/* ===== Settings Drawer Layer 2: Content ===== */}
+              <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                <div style={{
+                  flex: drawerLevel >= 2 ? 1 : 0, overflow: 'auto',
+                  borderRight: drawerLevel >= 2 ? '1px solid var(--border)' : 'none',
+                  padding: '24px 28px', maxWidth: drawerLevel >= 2 ? 480 : '100%',
+                  transition: 'all 0.2s'
+                }}>
+                  {/* LLM Config */}
+                  {activeSetting === 'llm' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>LLM Configuration</div>
+                      <div className="field">
+                        <label>API Key</label>
+                        <input type="password" value={llmConfig.apiKey} onChange={e => setLlmConfig(p => ({ ...p, apiKey: e.target.value }))} placeholder="sk-..." />
+                      </div>
+                      <div className="field-row">
+                        <div className="field">
+                          <label>Base URL</label>
+                          <input value={llmConfig.baseUrl} onChange={e => setLlmConfig(p => ({ ...p, baseUrl: e.target.value }))} placeholder="https://api.openai.com/v1" />
+                        </div>
+                        <div className="field">
+                          <label>Model</label>
+                          <input value={llmConfig.model} onChange={e => setLlmConfig(p => ({ ...p, model: e.target.value }))} placeholder="gpt-4o" />
+                        </div>
+                      </div>
+                      <div className="btn-row">
+                        <button className="btn-primary" onClick={() => { window.api.llm.saveConfig(llmConfig); setUpdateState({ status: 'up-to-date' }); setTimeout(() => setUpdateState({ status: 'idle' }), 1500); }}>Save</button>
+                        <button className={`btn-test ${testLoading ? '' : testResult?.ok ? 'test-ok' : testResult?.ok === false ? 'test-fail' : ''}`}
+                          onClick={testConnection} disabled={testLoading || !llmConfig.apiKey}>{testLoading ? 'Testing...' : 'Test Connection'}</button>
+                      </div>
+                      {testResult && <div className={`test-result ${testResult.ok ? 'test-ok' : 'test-fail'}`}>{testResult.msg}</div>}
+                      <div style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 12 }}>Changes are saved locally.</div>
+                    </div>
+                  )}
+
+                  {/* Agents */}
+                  {activeSetting === 'agents' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                        <div style={{ fontSize: 20, fontWeight: 700 }}>Agents</div>
+                        <button className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}
+                          onClick={() => { setEditingAgent(null); setShowAgentModal(true); }}>+ New Agent</button>
+                      </div>
+                      {agents.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>No agents configured</div>}
+                      <div className="agent-list">
+                        {agents.map(a => (
+                          <div key={a.id} className="agent-item">
+                            <div className="agent-info">
+                              <div className="agent-name">{a.name} {a.default && <span className="agent-default">Default</span>}</div>
+                              <div className="agent-desc">{a.description}</div>
+                              <div className="agent-model">{a.model || 'Default model'}</div>
+                              {a.skills?.length > 0 && (
+                                <div className="agent-skills">
+                                  <span>Skills: </span>
+                                  {a.skills.map((s: string) => <span key={s} className="agent-skill-tag">{s}</span>)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="agent-actions">
+                              <button className="agent-btn agent-btn-skills" title="Assign Skills" onClick={() => { pushDrawer('agent-skills', a); }}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                              </button>
+                              <button className="agent-btn agent-btn-edit" title="Edit" onClick={() => { setEditingAgent(a); setShowAgentModal(true); }}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                              </button>
+                              <button className="agent-btn agent-btn-del" title="Delete" onClick={() => deleteAgent(a.id)}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Skills */}
+                  {activeSetting === 'skills' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                        <div style={{ fontSize: 20, fontWeight: 700 }}>Skills</div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}
+                            onClick={() => { setEditingSkill(null); setShowSkillModal(true); }}>+ New</button>
+                          <button className="btn-cancel" style={{ padding: '7px 16px', fontSize: 13 }}
+                            onClick={() => { pushDrawer('marketplace'); searchMarketplace(''); }}>Marketplace</button>
+                        </div>
+                      </div>
+                      <div className="skill-list">
+                        {localSkills.map(s => (
+                          <div key={s.id} className="skill-item">
+                            <div className="skill-info">
+                              <div className="skill-name">{s.name} <span className="skill-type">{s.type || 'custom'}</span></div>
+                              <div className="skill-desc">{s.description}</div>
+                              {s.trigger && <div className="skill-trigger">Trigger: {s.trigger}</div>}
+                            </div>
+                            <button className="skill-del" title="Delete" onClick={() => deleteSkill(s.id)}>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="skill-hint">
+                        Skills are stored in <code>~/.appclaw/skills/</code> as <code>SKILL.md</code> files. Browse the <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => { pushDrawer('marketplace'); searchMarketplace(''); }}>Marketplace</span> to discover more.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Updates */}
+                  {activeSetting === 'updates' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>Updates</div>
+                      <div className="update-section">
+                        <span className="update-info">Current version: v0.4.2</span>
+                        <button className="btn-primary" style={{ padding: '7px 18px', fontSize: 13 }}
+                          onClick={async () => {
+                            setUpdateState({ status: 'idle' });
+                            const r = await window.api.updater.check().catch(() => ({ available: false, error: 'Check failed' }));
+                            if (r.available) setUpdateState({ status: 'available', version: r.version });
+                            else if (r.error) setUpdateState({ status: 'error' });
+                            else setUpdateState({ status: 'up-to-date' });
+                          }}>
+                          Check for Updates
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* About */}
+                  {activeSetting === 'about' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>About</div>
+                      <div className="about-text">
+                        <p><strong>AppClaw</strong> v0.4.2</p>
+                        <p style={{ marginTop: 8 }}>A desktop AI agent with autonomous capabilities.</p>
+                        <p style={{ marginTop: 8, color: 'var(--text-muted)' }}>Built with Electron + React + TypeScript.</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ===== Settings Drawer Level 3: Detail Panel ===== */}
+                {drawerLevel >= 2 && (
+                  <div style={{
+                    flex: 1, overflow: 'auto', padding: '24px 28px',
+                    background: 'var(--bg-primary)', minWidth: 0
+                  }}>
+                    {/* Back button */}
+                    <button onClick={popDrawer} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)',
+                      fontSize: 13, marginBottom: 20, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                      transition: 'all var(--transition-fast)'
+                    }}
+                      onMouseEnter={e => (e.target as HTMLElement).style.color = 'var(--text-primary)'}
+                      onMouseLeave={e => (e.target as HTMLElement).style.color = 'var(--text-muted)'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                      Back
+                    </button>
+
+                    {/* Agent Skill Assignment */}
+                    {activeSetting === 'agent-skills' && drawerStack.find(d => d.setting === 'agent-skills')?.data && (
+                      <AgentSkillAssign
+                        agent={drawerStack.find(d => d.setting === 'agent-skills')?.data}
+                        localSkills={localSkills}
+                        skillSearchQuery={skillSearchQuery}
+                        setSkillSearchQuery={setSkillSearchQuery}
+                        onToggleSkill={toggleSkillForAgent}
+                      />
+                    )}
+
+                    {/* Marketplace */}
+                    {activeSetting === 'marketplace' && (
+                      <MarketplaceView
+                        marketplaceSkills={marketplaceSkills}
+                        marketplaceLoading={marketplaceLoading}
+                        marketplaceQuery={marketplaceQuery}
+                        onSearch={searchMarketplace}
+                        onInstall={installMarketplaceSkill}
+                      />
+                    )}
+
+                    {/* Agent/Edit modal in-drawer */}
+                    {showAgentModal && (
+                      <AgentForm
+                        editingAgent={editingAgent}
+                        onSave={saveAgent}
+                        onCancel={() => { setShowAgentModal(false); setEditingAgent(null); }}
+                      />
+                    )}
+
+                    {/* Skill/Create modal in-drawer */}
+                    {showSkillModal && (
+                      <SkillForm
+                        editingSkill={editingSkill}
+                        onSave={saveSkill}
+                        onCancel={() => { setShowSkillModal(false); setEditingSkill(null); }}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn-cancel" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>取消</button>
-              <button className="btn-primary" onClick={editingAgent ? handleUpdateAgent : handleCreateAgent} disabled={(agentCreating || agentUpdating) || !newAgent.name.trim()}>
-                {agentCreating || agentUpdating ? '保存中...' : (editingAgent ? '保存修改' : '创建 Agent')}
-              </button>
+          ) : view === 'welcome' ? (
+            /* Welcome Screen */
+            <div className="welcome">
+              <div className="welcome-icon">
+                <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                  <path d="M32 4L6 18v28l26 14 26-14V18L32 4z" fill="url(#wg)" stroke="#6c8cff" strokeWidth="2" opacity="0.3"/>
+                  <path d="M32 32L18 24v16l14 8 14-8V24L32 32z" fill="#6c8cff" opacity="0.6"/>
+                  <defs><linearGradient id="wg" x1="6" y1="4" x2="58" y2="60"><stop stopColor="#6c8cff"/><stop offset="1" stopColor="#a78bfa"/></linearGradient></defs>
+                </svg>
+              </div>
+              <h2>Welcome to AppClaw</h2>
+              <p>Your desktop AI agent. Start a conversation or configure agents.</p>
+              <div className="chips">
+                <button className="chip" onClick={createSession}>Start a new chat</button>
+                <button className="chip" onClick={() => { setShowSettings(true); navigateSetting('agents'); }}>Configure agents</button>
+                <button className="chip" onClick={() => { setShowSettings(true); navigateSetting('llm'); }}>Set up LLM</button>
+              </div>
+            </div>
+          ) : (
+            /* Chat View */
+            <>
+              <div className="chat-top">
+                <div className="chat-top-title">{sessions.find(s => s.id === activeSessionId)?.title || 'Chat'}</div>
+                <div className="chat-top-right">
+                  <div className="agent-selector">
+                    <select value={activeAgentId} onChange={e => setActiveAgentId(e.target.value)}>
+                      <option value="default">Default Agent</option>
+                      {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div className={`status-dot ${isListening ? 'on' : ''}`}>
+                    <span className="dot" />
+                    {isListening ? 'Active' : 'Idle'}
+                  </div>
+                </div>
+              </div>
+              <div className="messages" ref={messagesRef}>
+                {messages.map(m => (
+                  <div key={m.id} className={`msg msg-${m.role === 'user' ? 'user' : 'assistant'}`}>
+                    <div className={`msg-avatar msg-avatar-${m.role === 'user' ? 'user' : 'assistant'}`}>
+                      {m.role === 'user' ? 'U' : 'AI'}
+                    </div>
+                    <div className="msg-body">
+                      <div className={`msg-bubble ${m.role === 'assistant' && m.content === '' && isLoading ? 'typing' : ''}`}>
+                        {m.content}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && !messages.some(m => m.id.endsWith('.loading')) && (
+                  <div className="msg msg-assistant">
+                    <div className="msg-avatar msg-avatar-assistant">AI</div>
+                    <div className="msg-body">
+                      <div className="msg-bubble typing">Thinking</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="input-area">
+                <div className="input-box">
+                  <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                    placeholder="Type a message..." rows={1} disabled={isLoading}
+                    onInput={e => { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; }} />
+                  <button className="send-btn" onClick={sendMessage} disabled={!input.trim() || isLoading}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Tool Confirm Overlay */}
+      {confirmReq && (
+        <div className="modal-overlay" onClick={() => setConfirmReq(null)}>
+          <div className="confirm-card" onClick={e => e.stopPropagation()}>
+            <div className="confirm-title">Tool Confirmation Required</div>
+            <div className="confirm-body">
+              <strong>{confirmReq.tool}</strong> wants to execute:<br />
+              <code style={{ fontSize: 12, wordBreak: 'break-word' }}>{JSON.stringify(confirmReq.args, null, 2)}</code>
+              {confirmReq.reason && <p style={{ marginTop: 8, opacity: 0.7 }}>Reason: {confirmReq.reason}</p>}
+            </div>
+            <div className="confirm-btns">
+              <button className="btn-allow" onClick={() => { window.api.tools.respondConfirm(confirmReq.messageId, true); setConfirmReq(null); }}>Allow</button>
+              <button className="btn-deny" onClick={() => { window.api.tools.respondConfirm(confirmReq.messageId, false); setConfirmReq(null); }}>Deny</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Agent Skills 关联 模态框 */}
-      {showAgentSkillsModal && editingAgent && (
-        <div className="modal-overlay" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{editingAgent.name} - 管理 Skills</h3>
-              <button className="modal-close" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>
-                <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="skill-assign-list">
-                {skillList.length === 0 ? (
-                  <div className="empty-hint">暂无 Skills，请先创建</div>
-                ) : (
-                  skillList.map((skill) => {
-                    const isAssigned = editingAgent.skills?.includes(skill.id) || false;
-                    return (
-                      <div key={skill.id} className={`skill-assign-item${isAssigned ? ' assigned' : ''}`}>
-                        <div className="skill-assign-info">
-                          <div className="skill-assign-name">{skill.name}</div>
-                          <div className="skill-assign-desc">{skill.description}</div>
-                        </div>
-                        <button className={`skill-assign-toggle${isAssigned ? ' active' : ''}`} onClick={() => handleToggleAgentSkill(editingAgent!.id, skill.id)}>
-                          {isAssigned ? '已关联' : '关联'}
-                        </button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-primary" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>完成</button>
-            </div>
-          </div>
+      {/* Error Toast */}
+      {error && (
+        <div style={{
+          position: 'fixed', bottom: 20, right: 20, padding: '12px 20px',
+          background: 'var(--red-dim)', border: '1px solid var(--red)',
+          borderRadius: 'var(--radius)', color: 'var(--red)', fontSize: 13, zIndex: 2000,
+          animation: 'slideDown 0.3s ease', cursor: 'pointer'
+        }} onClick={() => setError(null)}>
+          {error}
         </div>
       )}
     </div>
   );
 }
+
+// ===== Sub-components =====
+
+function AgentSkillAssign({ agent, localSkills, skillSearchQuery, setSkillSearchQuery, onToggleSkill }: {
+  agent: any; localSkills: SkillInfo[]; skillSearchQuery: string;
+  setSkillSearchQuery: (q: string) => void; onToggleSkill: (agentId: string, skillId: string) => void;
+}) {
+  const filtered = localSkills.filter(s => !skillSearchQuery || s.name.toLowerCase().includes(skillSearchQuery.toLowerCase()) || s.description?.toLowerCase().includes(skillSearchQuery.toLowerCase()));
+  return (
+    <div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Assign Skills</div>
+      <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+        Select skills for <strong style={{ color: 'var(--text-primary)' }}>{agent?.name}</strong>
+      </div>
+      {/* Search */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)', padding: '8px 14px',
+        transition: 'all var(--transition)'
+      }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+        <input value={skillSearchQuery} onChange={e => setSkillSearchQuery(e.target.value)}
+          placeholder="Search skills..." style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 13 }} />
+        {skillSearchQuery && (
+          <button onClick={() => setSkillSearchQuery('')} style={{ color: 'var(--text-muted)', padding: 2 }}>✕</button>
+        )}
+      </div>
+      <div className="skill-assign-list">
+        {filtered.length === 0 && <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 32, fontSize: 13 }}>No skills match your search</div>}
+        {filtered.map(s => {
+          const assigned = agent?.skills?.includes?.(s.id);
+          return (
+            <div key={s.id} className={`skill-assign-item ${assigned ? 'assigned' : ''}`}>
+              <div className="skill-assign-info">
+                <div className="skill-assign-name">{s.name}</div>
+                <div className="skill-assign-desc">{s.description}</div>
+              </div>
+              <button className={`skill-assign-toggle ${assigned ? 'active' : ''}`}
+                onClick={() => onToggleSkill(agent.id, s.id)}>
+                {assigned ? 'Assigned' : 'Assign'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQuery, onSearch, onInstall }: {
+  marketplaceSkills: any[]; marketplaceLoading: boolean; marketplaceQuery: string;
+  onSearch: (q: string) => void; onInstall: (skill: any) => Promise<any>;
+}) {
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState(marketplaceQuery);
+  const [resultMsg, setResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
+
+  const handleInstall = async (skill: any) => {
+    setInstalling(skill.name);
+    setResultMsg(null);
+    const r = await onInstall(skill);
+    setInstalling(null);
+    if (r.success) {
+      setResultMsg({ id: skill.name, success: true, msg: '✓ Installed successfully' });
+    } else {
+      setResultMsg({ id: skill.name, success: false, msg: `✗ ${r.error || 'Install failed'}` });
+    }
+    setTimeout(() => setResultMsg(null), 3000);
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Skill Marketplace</div>
+      <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+        Browse and install community skills from the skills.sh ecosystem.
+      </div>
+      {/* Search bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20,
+        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)', padding: '8px 14px',
+        transition: 'all var(--transition)'
+      }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+        <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && onSearch(searchInput)}
+          placeholder="Search marketplace..." style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 13 }} />
+        <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }} onClick={() => onSearch(searchInput)}>Search</button>
+      </div>
+
+      {marketplaceLoading && (
+        <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontSize: 13 }}>
+          Searching marketplace...
+        </div>
+      )}
+
+      {!marketplaceLoading && marketplaceSkills.length === 0 && (
+        <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 12 }}>
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+          <div style={{ fontSize: 14 }}>Search for skills in the marketplace</div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>Try searching "design", "react", or "testing"</div>
+        </div>
+      )}
+
+      {!marketplaceLoading && marketplaceSkills.filter(s => !s.error).map(s => (
+        <div key={s.name} style={{
+          display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
+          background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border)', marginBottom: 8,
+          transition: 'all var(--transition-fast)'
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              {s.name}
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>{s.id}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>{s.description}</div>
+            {s.installs && <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 6 }}>{s.installs} installs</div>}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+            <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }}
+              onClick={() => handleInstall(s)}
+              disabled={installing === s.name}>
+              {installing === s.name ? 'Installing...' : 'Install'}
+            </button>
+            {resultMsg?.id === s.name && (
+              <span style={{ fontSize: 11, color: resultMsg.success ? 'var(--green)' : 'var(--red)' }}>
+                {resultMsg.msg}
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+      {!marketplaceLoading && marketplaceSkills.filter(s => s.error).length > 0 && (
+        <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>
+          Could not fetch marketplace. The skills.sh API may not be accessible.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentForm({ editingAgent, onSave, onCancel }: {
+  editingAgent: any; onSave: (agent: any) => void; onCancel: () => void;
+}) {
+  const [form, setForm] = useState(editingAgent || { name: '', description: '', model: '', systemPrompt: '', skills: [] });
+  return (
+    <div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>{editingAgent ? 'Edit Agent' : 'New Agent'}</div>
+      <div className="field">
+        <label>Name</label>
+        <input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="Agent name" />
+      </div>
+      <div className="field">
+        <label>Description</label>
+        <textarea rows={2} value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} placeholder="What this agent does" />
+      </div>
+      <div className="field">
+        <label>Model</label>
+        <input value={form.model} onChange={e => setForm(p => ({ ...p, model: e.target.value }))} placeholder="gpt-4o (leave empty for default)" />
+      </div>
+      <div className="field">
+        <label>System Prompt</label>
+        <textarea rows={4} value={form.systemPrompt} onChange={e => setForm(p => ({ ...p, systemPrompt: e.target.value }))} placeholder="Instructions for the agent..." />
+      </div>
+      <div className="btn-row">
+        <button className="btn-primary" onClick={() => onSave(form)}>Save</button>
+        <button className="btn-cancel" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function SkillForm({ editingSkill, onSave, onCancel }: {
+  editingSkill: any; onSave: (skill: any) => void; onCancel: () => void;
+}) {
+  const [form, setForm] = useState(editingSkill || { name: '', description: '', id: '', trigger: '', systemPrompt: '' });
+  return (
+    <div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>{editingSkill ? 'Edit Skill' : 'New Skill'}</div>
+      <div className="field">
+        <label>ID</label>
+        <input value={form.id} onChange={e => setForm(p => ({ ...p, id: e.target.value }))} placeholder="my-skill" disabled={!!editingSkill} />
+      </div>
+      <div className="field">
+        <label>Name</label>
+        <input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="My Skill" />
+      </div>
+      <div className="field">
+        <label>Description</label>
+        <textarea rows={2} value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} placeholder="What this skill does" />
+      </div>
+      <div className="field">
+        <label>Trigger / Keyword</label>
+        <input value={form.trigger} onChange={e => setForm(p => ({ ...p, trigger: e.target.value }))} placeholder="e.g. translate, summarize" />
+      </div>
+      <div className="field">
+        <label>System Prompt</label>
+        <textarea rows={6} value={form.systemPrompt} onChange={e => setForm(p => ({ ...p, systemPrompt: e.target.value }))} placeholder="Skill instructions..." />
+      </div>
+      <div className="btn-row">
+        <button className="btn-primary" onClick={() => onSave(form)}>Save</button>
+        <button className="btn-cancel" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+export default App;

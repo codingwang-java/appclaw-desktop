@@ -85,6 +85,10 @@ declare global {
         save: (skillId: string, updates: Partial<SkillInfo> & { systemPrompt?: string }) => Promise<boolean>;
         getPrompt: (skillId: string) => Promise<string | null>;
         exists: (skillId: string) => Promise<boolean>;
+        marketplace: {
+          search: (query: string) => Promise<{ id: string; name: string; description: string; installs: string }[]>;
+          install: (repoPath: string, skillName: string) => Promise<{ success: boolean; error?: string }>;
+        };
       };
     };
   }
