@@ -1,12 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
+import { homedir } from 'os';
 import type { LLMConfig, MCPServerConfig, WorkspaceConfig } from '../../src/shared/types';
 import { initDatabase } from './memory-service';
 import { setLLMConfig, getLLMConfig } from './llm-provider';
 import { startMCPServer } from './mcp-manager';
 
-const APP_DIR = path.join(os.homedir(), '.appclaw');
+const APP_DIR = path.join(homedir(), '.appclaw');
 const DEFAULT_WORKSPACE_DIR = path.join(APP_DIR, 'workspaces', 'default');
 const DB_PATH = path.join(DEFAULT_WORKSPACE_DIR, 'memory.db');
 const CONFIG_PATH = path.join(DEFAULT_WORKSPACE_DIR, 'config.json');

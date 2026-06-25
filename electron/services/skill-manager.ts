@@ -1,12 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { homedir } from 'os';
 import { app } from 'electron';
 import * as vm from 'vm';
 import type { SkillInfo, SkillParameter, SkillExecutionResult } from '../../src/shared/types';
 
 function getSkillsDir(): string {
-  const base = process.env.APPCLAW_SKILLS_DIR || path.join(os.homedir(), '.appclaw', 'skills');
+  const base = process.env.APPCLAW_SKILLS_DIR || path.join(homedir(), '.appclaw', 'skills');
   if (!fs.existsSync(base)) fs.mkdirSync(base, { recursive: true });
   return base;
 }

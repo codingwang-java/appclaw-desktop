@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
-import * as os from 'os';
+import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { registerIpcHandlers } from './ipc-handlers';
 import { initializeWorkspace } from './services/workspace-manager';
@@ -9,7 +9,7 @@ import { initAutoUpdater } from './services/update-service';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-process.env.APP_DATA_DIR = path.join(os.homedir(), '.appclaw');
+process.env.APP_DATA_DIR = path.join(homedir(), '.appclaw');
 
 // 捕获所有未处理异常，防止静默崩溃
 process.on('uncaughtException', (err) => {

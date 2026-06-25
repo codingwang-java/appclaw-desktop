@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import path from 'path';
-import os from 'os';
+import { homedir, EOL, tmpdir } from 'os';
 import type { MCPServerConfig, ToolResult } from '../../src/shared/types';
 
 interface ServerInstance {
@@ -24,8 +24,8 @@ function findSystemNode(): string | null {
   const candidates = [
     'C:\\Program Files\\nodejs\\node.exe',
     'C:\\Program Files (x86)\\nodejs\\node.exe',
-    path.join(os.homedir(), 'AppData', 'Local', 'nvm4w', 'nodejs', 'node.exe'),
-    path.join(os.homedir(), '.nvm', 'versions', 'node', 'current', 'bin', 'node'),
+    path.join(homedir(), 'AppData', 'Local', 'nvm4w', 'nodejs', 'node.exe'),
+    path.join(homedir(), '.nvm', 'versions', 'node', 'current', 'bin', 'node'),
   ];
   for (const c of candidates) {
     try {
@@ -334,7 +334,7 @@ export async function startMCPServer(config: MCPServerConfig, projectRoot: strin
 
   child.stdout?.on('data', (data) => {
     instance.buffer += data.toString();
-    const lines = instance.buffer.split(os.EOL);
+    const lines = instance.buffer.split(EOL);
     instance.buffer = lines.pop() || '';
 
     for (const line of lines) {
@@ -366,11 +366,11 @@ export async function startMCPServer(config: MCPServerConfig, projectRoot: strin
     method: 'initialize',
     params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'AppClaw', version: '0.1.0' } }
   });
-  child.stdin?.write(initMsg + os.EOL);
+  child.stdin?.write(initMsg + EOL);
 
   instance.requestId++;
   const notifMsg = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
-  child.stdin?.write(notifMsg + os.EOL);
+  child.stdin?.write(notifMsg + EOL);
 
   instance.initialized = true;
 }
@@ -437,7 +437,7 @@ async function callMCPTool(instance: ServerInstance, funcName: string, args: Rec
       params: { name: funcName, arguments: args }
     });
 
-    instance.process.stdin?.write(msg + os.EOL);
+    instance.process.stdin?.write(msg + EOL);
 
     setTimeout(() => {
       if (instance.pendingPromises.has(id)) {
@@ -569,7 +569,7 @@ async function handleDesktopTool(toolName: string, args: Record<string, any>): P
   const execAsync = promisify(exec);
 
   async function runPS(script: string, timeout = 10000): Promise<string> {
-    const tmpFile = path.join(os.tmpdir(), `appclaw-ps-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
+    const tmpFile = path.join(tmpdir(), `appclaw-ps-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
     fs.writeFileSync(tmpFile, script, 'utf-8');
     try {
       const { stdout, stderr } = await execAsync(
@@ -597,7 +597,7 @@ Write-Output "$($s.Bounds.Width)x$($s.Bounds.Height)"
 
   if (toolName === 'desktop_screenshot') {
     try {
-      const outputPath = args.outputPath || path.join(os.tmpdir(), `appclaw-screenshot-${Date.now()}.png`);
+      const outputPath = args.outputPath || path.join(tmpdir(), `appclaw-screenshot-${Date.now()}.png`);
       const dir = path.dirname(outputPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const escapedPath = outputPath.replace(/\\/g, '\\\\');

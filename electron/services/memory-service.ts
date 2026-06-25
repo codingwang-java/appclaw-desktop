@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import fs from 'fs';
 import path from 'path';
+import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatMessage, Session, MemoryItem, AgentConfig } from '../../src/shared/types';
 
@@ -286,7 +287,7 @@ export async function logToolExecution(sessionId: string, toolName: string, args
   );
 }
 
-const MEMORY_DIR = path.join(os.homedir(), '.appclaw', 'memory');
+const MEMORY_DIR = path.join(homedir(), '.appclaw', 'memory');
 const MEMORY_FILE = path.join(MEMORY_DIR, 'MEMORY.md');
 const USER_FILE = path.join(MEMORY_DIR, 'USER.md');
 const L1_TOKEN_LIMIT = 1300;

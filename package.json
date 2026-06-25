@@ -1,6 +1,6 @@
 {
   "name": "appclaw",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Desktop Agent - 对话式 AI 桌面助手",
   "main": "dist-electron/main.js",
   "author": "AppClaw",
@@ -19,8 +19,8 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@modelcontextprotocol/sdk": "^1.5.0",
-    "openai": "^4.77.0",
     "electron-updater": "^6.6.0",
+    "openai": "^4.77.0",
     "uuid": "^11.0.3"
   },
   "devDependencies": {
@@ -28,6 +28,7 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "ajv-keywords": "^5.1.0",
     "electron": "^34.0.0",
     "electron-builder": "^25.1.8",
     "react": "^19.0.0",
@@ -56,7 +57,10 @@
       "resources/**"
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "sign": false
     },
     "publish": {
