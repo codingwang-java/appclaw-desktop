@@ -10,7 +10,18 @@ import {
   saveL1Memory,
   searchL2,
   addL3Memory,
-  searchL3
+  searchL3,
+  listAgents,
+  getAgent,
+  createAgent,
+  updateAgent,
+  deleteAgent,
+  getAgentSkills,
+  addAgentSkill,
+  removeAgentSkill,
+  toggleAgentSkill,
+  searchAgentMemory,
+  addAgentMemory
 } from './services/memory-service';
 import {
   getWorkspace,
@@ -46,10 +57,35 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('session:list', async () => listSessions());
-  ipcMain.handle('session:create', async (_e, title: string) => createSession(title));
+  ipcMain.handle('session:create', async (_e, title: string, agentId?: string) => createSession(title, agentId || 'default-agent'));
   ipcMain.handle('session:delete', async (_e, sessionId: string) => deleteSession(sessionId));
 
   ipcMain.handle('message:list', async (_e, sessionId: string) => listMessages(sessionId));
+
+  ipcMain.handle('agent:list', async () => listAgents());
+  ipcMain.handle('agent:get', async (_e, agentId: string) => getAgent(agentId));
+  ipcMain.handle('agent:create', async (_e, data: any) => createAgent(data));
+  ipcMain.handle('agent:update', async (_e, agentId: string, data: any) => updateAgent(agentId, data));
+  ipcMain.handle('agent:delete', async (_e, agentId: string) => deleteAgent(agentId));
+
+  ipcMain.handle('agent:skills:list', async (_e, agentId: string) => getAgentSkills(agentId));
+  ipcMain.handle('agent:skills:add', async (_e, agentId: string, skillId: string) => {
+    await addAgentSkill(agentId, skillId);
+    return true;
+  });
+  ipcMain.handle('agent:skills:remove', async (_e, agentId: string, skillId: string) => {
+    await removeAgentSkill(agentId, skillId);
+    return true;
+  });
+  ipcMain.handle('agent:skills:toggle', async (_e, agentId: string, skillId: string) => toggleAgentSkill(agentId, skillId));
+
+  ipcMain.handle('agent:memory:search', async (_e, { agentId, query, limit }: { agentId: string; query: string; limit?: number }) => {
+    return searchAgentMemory(agentId, query, limit || 5);
+  });
+  ipcMain.handle('agent:memory:add', async (_e, { agentId, content, memoryType }: { agentId: string; content: string; memoryType?: string }) => {
+    const id = await addAgentMemory(agentId, content, memoryType || 'fact');
+    return !!id;
+  });
 
   ipcMain.handle('chat:send', async (_e, payload: ChatSendPayload) => {
     return sendChatMessage(payload.sessionId, payload.message, payload.agentId || 'default-agent');

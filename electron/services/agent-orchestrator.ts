@@ -64,7 +64,7 @@ async function runAgentTurn(
   if (depth > 6) return;
 
   const win = getMainWindow();
-  const contextMessages = await buildContextMessages(sessionId, userQuery);
+  const contextMessages = await buildContextMessages(sessionId, userQuery, agent.id);
   const tools = getToolDefinitions(agent.tools);
 
   let fullContent = '';

@@ -4,6 +4,7 @@ import path from 'path';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatMessage, Session, MemoryItem, AgentConfig } from '../../src/shared/types';
+import { listSkills } from './skill-manager';
 
 let db: PGlite | null = null;
 
@@ -19,6 +20,9 @@ CREATE TABLE IF NOT EXISTS agents (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS avatar TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -60,6 +64,18 @@ CREATE TABLE IF NOT EXISTS long_term_memory (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE IF EXISTS long_term_memory ADD COLUMN IF NOT EXISTS agent_id TEXT;
+
+CREATE TABLE IF NOT EXISTS agent_skills (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  enabled SMALLINT NOT NULL DEFAULT 1,
+  priority INTEGER DEFAULT 100,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (agent_id, skill_id)
+);
+
 CREATE TABLE IF NOT EXISTS tool_executions (
   id TEXT PRIMARY KEY,
   session_id TEXT,
@@ -94,6 +110,8 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+ALTER TABLE IF EXISTS episodic_memory ADD COLUMN IF NOT EXISTS agent_id TEXT;
+
 CREATE TABLE IF NOT EXISTS skill_memory (
   skill_id TEXT PRIMARY KEY,
   use_count INTEGER DEFAULT 0,
@@ -109,6 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_tools_session ON tool_executions(session_id);
 CREATE INDEX IF NOT EXISTS idx_episodic_type ON episodic_memory(memory_type);
 CREATE INDEX IF NOT EXISTS idx_episodic_active ON episodic_memory(is_active);
 CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_memory(importance);
+CREATE INDEX IF NOT EXISTS idx_memory_agent ON long_term_memory(agent_id);
+CREATE INDEX IF NOT EXISTS idx_episodic_agent ON episodic_memory(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_skills ON agent_skills(agent_id);
 
 INSERT INTO agents (id, name, model, system_prompt, temperature, tools, tool_permissions)
 VALUES (
@@ -119,6 +140,30 @@ VALUES (
   0.7,
   '["filesystem", "browser", "shell", "memory", "desktop"]',
   '{"fs_write_file": {"requireConfirm": true}, "shell_exec": {"requireConfirm": true}, "email_send": {"requireConfirm": true}, "desktop_click": {"requireConfirm": true}, "desktop_double_click": {"requireConfirm": true}, "desktop_type": {"requireConfirm": true}, "desktop_press_key": {"requireConfirm": true}}'
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agents (id, name, description, model, system_prompt, temperature, tools, tool_permissions)
+VALUES (
+  'office-assistant',
+  '办公助手',
+  '专业的办公效率助手，帮助处理文档、邮件、日程安排等办公任务',
+  'gpt-4o-mini',
+  '你是一个专业的办公效率助手。你的专长包括：\n1. 文档处理：撰写、编辑、格式化各类办公文档\n2. 邮件处理：撰写邮件、回复邮件、邮件分类\n3. 日程管理：安排会议、提醒事项\n4. 数据分析：Excel 公式、数据统计\n5. 报告撰写：工作总结、项目报告、PPT 文案\n\n请用专业、简洁的中文回复。遇到不确定的信息时，主动询问用户。对于涉及修改文件或发送邮件的操作，必须先确认。',
+  0.5,
+  '["filesystem", "browser", "memory"]',
+  '{"fs_write_file": {"requireConfirm": true}}'
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agents (id, name, description, model, system_prompt, temperature, tools, tool_permissions)
+VALUES (
+  'stock-trader',
+  '股票交易助手',
+  '专业的股票市场分析和交易辅助助手',
+  'gpt-4o-mini',
+  '你是一个专业的股票市场分析助手。你的专长包括：\n1. 股票查询：查询股票价格、涨跌幅、成交量\n2. 市场分析：技术分析、基本面分析\n3. 投资建议：基于市场数据提供投资建议\n4. 交易记录：记录交易、计算收益\n5. 行情监控：关注股票动态、提醒关键点位\n\n⚠️ 免责声明：你提供的所有分析和建议仅供参考，不构成投资建议。投资有风险，入市需谨慎。\n\n请用专业、客观的中文回复。对于涉及真实交易的操作，必须先确认。',
+  0.3,
+  '["browser", "memory"]',
+  '{}'
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO sessions (id, agent_id, title, created_at, updated_at)
@@ -252,103 +297,183 @@ export async function getAgent(agentId: string): Promise<AgentConfig | null> {
   );
   if (result.rows.length === 0) return null;
   const row: any = result.rows[0];
+  const skills = await getAgentSkills(agentId);
   return {
     id: row.id,
     name: row.name,
+    description: row.description || undefined,
+    avatar: row.avatar || undefined,
     model: row.model,
     systemPrompt: row.system_prompt,
     temperature: row.temperature,
     tools: JSON.parse(row.tools || '[]'),
-    toolPermissions: JSON.parse(row.tool_permissions || '{}')
+    toolPermissions: JSON.parse(row.tool_permissions || '{}'),
+    skills
   };
 }
 
 export async function listAgents(): Promise<AgentConfig[]> {
   const result = await getDb().query('SELECT * FROM agents ORDER BY created_at');
-  return result.rows.map((row: any) => ({
-    id: row.id,
-    name: row.name,
-    model: row.model,
-    systemPrompt: row.system_prompt,
-    temperature: row.temperature,
-    tools: JSON.parse(row.tools || '[]'),
-    toolPermissions: JSON.parse(row.tool_permissions || '{}')
-  }));
+  const agents: AgentConfig[] = [];
+  for (const row of result.rows as any[]) {
+    const skills = await getAgentSkills(row.id);
+    agents.push({
+      id: row.id,
+      name: row.name,
+      description: row.description || undefined,
+      avatar: row.avatar || undefined,
+      model: row.model,
+      systemPrompt: row.system_prompt,
+      temperature: row.temperature,
+      tools: JSON.parse(row.tools || '[]'),
+      toolPermissions: JSON.parse(row.tool_permissions || '{}'),
+      skills
+    });
+  }
+  return agents;
 }
 
-export async function logToolExecution(sessionId: string, toolName: string, args: any, success: boolean, durationMs: number, userApproved: boolean, errorMessage?: string): Promise<void> {
+export async function createAgent(data: { name: string; description?: string; avatar?: string; model?: string; systemPrompt?: string; temperature?: number; tools?: string[] }): Promise<AgentConfig> {
   const id = uuidv4();
   const now = new Date().toISOString();
-  const argsStr = typeof args === 'string' ? args.slice(0, 500) : JSON.stringify(args || {}).slice(0, 500);
   await getDb().query(
-    `INSERT INTO tool_executions (id, session_id, tool_name, arguments, success, duration_ms, user_approved, error_message, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [id, sessionId, toolName, argsStr, success ? 1 : 0, durationMs, userApproved ? 1 : 0, errorMessage || null, now]
+    `INSERT INTO agents (id, name, description, avatar, model, system_prompt, temperature, tools, tool_permissions, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [
+      id,
+      data.name,
+      data.description || '',
+      data.avatar || '',
+      data.model || 'gpt-4o-mini',
+      data.systemPrompt || '',
+      data.temperature || 0.7,
+      JSON.stringify(data.tools || []),
+      JSON.stringify({}),
+      now,
+      now
+    ]
+  );
+  return {
+    id,
+    name: data.name,
+    description: data.description || undefined,
+    avatar: data.avatar || undefined,
+    model: data.model || 'gpt-4o-mini',
+    systemPrompt: data.systemPrompt || '',
+    temperature: data.temperature || 0.7,
+    tools: data.tools || [],
+    toolPermissions: {},
+    skills: []
+  };
+}
+
+export async function updateAgent(agentId: string, data: { name?: string; description?: string; avatar?: string; model?: string; systemPrompt?: string; temperature?: number; tools?: string[] }): Promise<AgentConfig> {
+  const updates: string[] = [];
+  const params: any[] = [];
+  let idx = 1;
+
+  if (data.name !== undefined) { updates.push(`name = $${idx++}`); params.push(data.name); }
+  if (data.description !== undefined) { updates.push(`description = $${idx++}`); params.push(data.description); }
+  if (data.avatar !== undefined) { updates.push(`avatar = $${idx++}`); params.push(data.avatar); }
+  if (data.model !== undefined) { updates.push(`model = $${idx++}`); params.push(data.model); }
+  if (data.systemPrompt !== undefined) { updates.push(`system_prompt = $${idx++}`); params.push(data.systemPrompt); }
+  if (data.temperature !== undefined) { updates.push(`temperature = $${idx++}`); params.push(data.temperature); }
+  if (data.tools !== undefined) { updates.push(`tools = $${idx++}`); params.push(JSON.stringify(data.tools)); }
+
+  if (updates.length > 0) {
+    updates.push(`updated_at = $${idx++}`);
+    params.push(new Date().toISOString());
+    params.push(agentId);
+    await getDb().query(`UPDATE agents SET ${updates.join(', ')} WHERE id = $${idx}`, params);
+  }
+
+  const agent = await getAgent(agentId);
+  if (!agent) throw new Error('Agent not found');
+  return agent;
+}
+
+export async function deleteAgent(agentId: string): Promise<boolean> {
+  await getDb().query('DELETE FROM agent_skills WHERE agent_id = $1', [agentId]);
+  await getDb().query('DELETE FROM sessions WHERE agent_id = $1', [agentId]);
+  await getDb().query('DELETE FROM long_term_memory WHERE agent_id = $1', [agentId]);
+  await getDb().query('DELETE FROM episodic_memory WHERE agent_id = $1', [agentId]);
+  await getDb().query('DELETE FROM agents WHERE id = $1', [agentId]);
+  return true;
+}
+
+export async function getAgentSkills(agentId: string): Promise<string[]> {
+  const result = await getDb().query(
+    'SELECT skill_id FROM agent_skills WHERE agent_id = $1 AND enabled = 1 ORDER BY priority',
+    [agentId]
+  );
+  const skillIds = result.rows.map((row: any) => row.skill_id);
+  if (skillIds.length === 0) return [];
+  const allSkills = await listSkills();
+  const skillMap = new Map(allSkills.map(s => [s.id, s.name]));
+  return skillIds.map(id => skillMap.get(id) || id);
+}
+
+export async function addAgentSkill(agentId: string, skillId: string): Promise<void> {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await getDb().query(
+    'INSERT INTO agent_skills (id, agent_id, skill_id, enabled, priority, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (agent_id, skill_id) DO UPDATE SET enabled = 1',
+    [id, agentId, skillId, 1, 100, now]
   );
 }
 
-const MEMORY_DIR = path.join(homedir(), '.appclaw', 'memory');
-const MEMORY_FILE = path.join(MEMORY_DIR, 'MEMORY.md');
-const USER_FILE = path.join(MEMORY_DIR, 'USER.md');
-const L1_TOKEN_LIMIT = 1300;
-const NUDGE_INTERVAL = 10;
-const COMPRESS_THRESHOLD = 30;
-const RECENT_MESSAGES_KEEP = 20;
-const SUMMARY_MAX_TOKENS = 500;
-
-let turnCount = 0;
-
-export function getMemoryDir(): string {
-  if (!fs.existsSync(MEMORY_DIR)) {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
-  }
-  return MEMORY_DIR;
+export async function removeAgentSkill(agentId: string, skillId: string): Promise<void> {
+  await getDb().query('DELETE FROM agent_skills WHERE agent_id = $1 AND skill_id = $2', [agentId, skillId]);
 }
 
-export function loadL1Memory(): { memory: string; user: string } {
-  getMemoryDir();
-  const memory = fs.existsSync(MEMORY_FILE) ? fs.readFileSync(MEMORY_FILE, 'utf-8') : '';
-  const user = fs.existsSync(USER_FILE) ? fs.readFileSync(USER_FILE, 'utf-8') : '';
-  return { memory, user };
-}
+export async function toggleAgentSkill(agentId: string, skillId: string): Promise<boolean> {
+  const result = await getDb().query(
+    'SELECT enabled FROM agent_skills WHERE agent_id = $1 AND skill_id = $2 LIMIT 1',
+    [agentId, skillId]
+  );
 
-export function saveL1Memory(data: { memory: string; user: string }): boolean {
-  try {
-    getMemoryDir();
-    fs.writeFileSync(MEMORY_FILE, truncateByTokens(data.memory, 800), 'utf-8');
-    fs.writeFileSync(USER_FILE, truncateByTokens(data.user, 500), 'utf-8');
+  if (result.rows.length === 0) {
+    await addAgentSkill(agentId, skillId);
     return true;
-  } catch {
-    return false;
   }
+
+  const currentEnabled = (result.rows[0] as any).enabled === 1;
+  await getDb().query(
+    'UPDATE agent_skills SET enabled = $1 WHERE agent_id = $2 AND skill_id = $3',
+    [currentEnabled ? 0 : 1, agentId, skillId]
+  );
+  return !currentEnabled;
 }
 
-function truncateByTokens(text: string, maxTokens: number): string {
-  const avgCharsPerToken = 4;
-  const maxChars = maxTokens * avgCharsPerToken;
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars - 3) + '...';
-}
-
-export async function searchL2(query: string, limit: number = 3): Promise<MemoryItem[]> {
+export async function searchAgentMemory(agentId: string, query: string, limit: number = 5): Promise<MemoryItem[]> {
   const searchTerm = `%${query}%`;
   const result = await getDb().query<MemoryItem>(
-    `SELECT id, content, session_id as "memoryType", created_at as "createdAt"
-     FROM messages
-     WHERE role IN ('user', 'assistant') AND content LIKE $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [searchTerm, limit]
+    `SELECT id, content, memory_type as "memoryType", created_at as "createdAt"
+     FROM long_term_memory
+     WHERE is_active = 1 AND agent_id = $1 AND (content LIKE $2 OR memory_type LIKE $3)
+     ORDER BY importance DESC, created_at DESC
+     LIMIT $4`,
+    [agentId, searchTerm, searchTerm, limit]
   );
   return result.rows;
+}
+
+export async function addAgentMemory(agentId: string, content: string, memoryType: string = 'fact'): Promise<string> {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await getDb().query(
+    'INSERT INTO long_term_memory (id, agent_id, content, memory_type, created_at) VALUES ($1, $2, $3, $4, $5)',
+    [id, agentId, content, memoryType, now]
+  );
+  return id;
 }
 
 export async function addL3Memory(content: string, memoryType: string = 'fact', sourceSession?: string): Promise<string> {
   const id = uuidv4();
   const now = new Date().toISOString();
   await getDb().query(
-    'INSERT INTO episodic_memory (id, content, memory_type, source_session, created_at) VALUES ($1, $2, $3, $4, $5)',
-    [id, content.slice(0, 2000), memoryType, sourceSession || null, now]
+    'INSERT INTO long_term_memory (id, content, memory_type, source_session, created_at) VALUES ($1, $2, $3, $4, $5)',
+    [id, content, memoryType, sourceSession || null, now]
   );
   return id;
 }
@@ -356,186 +481,65 @@ export async function addL3Memory(content: string, memoryType: string = 'fact', 
 export async function searchL3(query: string, limit: number = 5): Promise<MemoryItem[]> {
   const searchTerm = `%${query}%`;
   const result = await getDb().query<MemoryItem>(
-    `SELECT id, content, memory_type as "memoryType", importance, access_count as "accessCount", created_at as "createdAt"
-     FROM episodic_memory
-     WHERE is_active = 1 AND content LIKE $1
-     ORDER BY importance DESC, access_count DESC
-     LIMIT $2`,
-    [searchTerm, limit]
+    `SELECT id, content, memory_type as "memoryType", created_at as "createdAt"
+     FROM long_term_memory
+     WHERE is_active = 1 AND (content LIKE $1 OR memory_type LIKE $2)
+     ORDER BY importance DESC, created_at DESC
+     LIMIT $3`,
+    [searchTerm, searchTerm, limit]
   );
   return result.rows;
 }
 
-export async function updateSkillStats(skillId: string, success: boolean): Promise<void> {
-  const now = new Date().toISOString();
-  const result = await getDb().query(
-    'SELECT * FROM skill_memory WHERE skill_id = $1 LIMIT 1',
-    [skillId]
-  );
-  if (result.rows.length > 0) {
-    const row = result.rows[0];
-    const updates = [
-      `use_count = ${row.use_count + 1}`,
-      success ? `success_count = ${row.success_count + 1}` : '',
-      `last_used = '${now}'`,
-      success ? `last_success = '${now}'` : ''
-    ].filter(Boolean).join(', ');
-    await getDb().query(
-      `UPDATE skill_memory SET ${updates} WHERE skill_id = $1`,
-      [skillId]
-    );
-  } else {
-    await getDb().query(
-      'INSERT INTO skill_memory (skill_id, use_count, success_count, last_used, last_success) VALUES ($1, $2, $3, $4, $5)',
-      [skillId, 1, success ? 1 : 0, now, success ? now : null]
-    );
-  }
+export async function loadL1Memory(): Promise<{ memory: string; user: string }> {
+  return { memory: '', user: '' };
 }
 
-export async function buildContextMessages(sessionId: string, currentQuery: string): Promise<{ role: string; content: string; source?: string }[]> {
+export async function saveL1Memory(data: { memory: string; user: string }): Promise<void> {
+  return;
+}
+
+export async function searchL2(query: string, limit: number = 3): Promise<any[]> {
+  return [];
+}
+
+export async function buildContextMessages(sessionId: string, currentQuery: string, agentId?: string): Promise<{ role: string; content: string; source?: string }[]> {
   const context: { role: string; content: string; source?: string }[] = [];
-
-  const l1 = loadL1Memory();
-  if (l1.memory || l1.user) {
-    const l1Content = [];
-    if (l1.memory) l1Content.push(`--- 环境信息 ---${l1.memory}`);
-    if (l1.user) l1Content.push(`--- 用户信息 ---${l1.user}`);
-    context.push({ role: 'system', content: l1Content.join('\n\n'), source: 'l1' });
+  const messages = await listMessages(sessionId);
+  const recentMessages = messages.slice(-10);
+  
+  for (const msg of recentMessages) {
+    context.push({ role: msg.role, content: msg.content || '', source: 'session' });
   }
 
-  const l2Results = await searchL2(currentQuery, 3);
-  if (l2Results.length > 0) {
-    const l2Content = l2Results.map((r, i) => `[历史${i + 1}] ${r.content}`).join('\n');
-    context.push({ role: 'system', content: `--- 相关历史 ---${l2Content}`, source: 'l2' });
-  }
-
-  const l3Results = await searchL3(currentQuery, 3);
-  if (l3Results.length > 0) {
-    const l3Content = l3Results.map(r => `[${r.memoryType}] ${r.content}`).join('\n');
-    context.push({ role: 'system', content: `--- 长期记忆 ---${l3Content}`, source: 'l3' });
-  }
-
-  const allMessages = await listMessages(sessionId);
-  if (allMessages.length > COMPRESS_THRESHOLD) {
-    const summary = await getOrGenerateSummary(sessionId, allMessages.slice(0, -RECENT_MESSAGES_KEEP));
-    if (summary) {
-      context.push({ role: 'system', content: `--- 对话摘要 ---\n${summary}`, source: 'summary' });
+  if (agentId) {
+    const agentL3Results = await searchAgentMemory(agentId, currentQuery, 3);
+    if (agentL3Results.length > 0) {
+      const l3Content = agentL3Results.map(r => `[${r.memoryType}] ${r.content}`).join('\n');
+      context.push({ role: 'system', content: `--- Agent 记忆 ---${l3Content}`, source: 'agent-l3' });
     }
   }
 
-  const recentMessages = allMessages.slice(-RECENT_MESSAGES_KEEP);
-  for (const m of recentMessages) {
-    if (m.role === 'tool') continue;
-    context.push({
-      role: m.role,
-      content: m.content || '',
-      source: 'session'
-    });
+  const globalL3Results = await searchL3(currentQuery, 3);
+  if (globalL3Results.length > 0) {
+    const l3Content = globalL3Results.map(r => `[${r.memoryType}] ${r.content}`).join('\n');
+    context.push({ role: 'system', content: `--- 长期记忆 ---${l3Content}`, source: 'global-l3' });
   }
 
   return context;
 }
 
-async function getOrGenerateSummary(sessionId: string, earlyMessages: ChatMessage[]): Promise<string | null> {
-  const sessionResult = await getDb().query('SELECT summary FROM sessions WHERE id = $1', [sessionId]);
-  if (sessionResult.rows.length > 0 && sessionResult.rows[0].summary) {
-    return sessionResult.rows[0].summary as string;
-  }
-
-  const summary = await generateConversationSummary(earlyMessages);
-  if (summary) {
-    await getDb().query('UPDATE sessions SET summary = $1, updated_at = $2 WHERE id = $3',
-      [summary, new Date().toISOString(), sessionId]);
-  }
-  return summary;
-}
-
-async function generateConversationSummary(messages: ChatMessage[]): Promise<string | null> {
-  try {
-    const { getLLMConfig } = await import('./llm-provider');
-    const cfg = getLLMConfig();
-    if (!cfg?.apiKey) return null;
-
-    const { OpenAI } = await import('openai');
-    const client = new OpenAI({
-      apiKey: cfg.apiKey,
-      baseURL: cfg.baseUrl || undefined,
-    });
-
-    const conversationText = messages
-      .filter(m => m.role !== 'tool' && m.content)
-      .map(m => `${m.role}: ${m.content}`)
-      .join('\n')
-      .slice(0, 8000);
-
-    const resp = await client.chat.completions.create({
-      model: cfg.model || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: '请用简洁的中文总结下面的对话内容，保留关键信息、决策和结果。控制在300字以内。' },
-        { role: 'user', content: conversationText }
-      ],
-      max_tokens: 300,
-      temperature: 0.3
-    });
-
-    return resp.choices[0]?.message?.content?.trim() || null;
-  } catch {
-    return null;
-  }
+export async function logToolExecution(sessionId: string, toolName: string, args: Record<string, any>, success: boolean, durationMs: number, userApproved: boolean, errorMessage?: string): Promise<void> {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await getDb().query(
+    `INSERT INTO tool_executions (id, session_id, tool_name, arguments, result_preview, success, duration_ms, user_approved, error_message, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, sessionId, toolName, JSON.stringify(args), '', success ? 1 : 0, durationMs, userApproved ? 1 : 0, errorMessage || null, now]
+  );
 }
 
 export async function triggerNudge(sessionId: string): Promise<void> {
-  turnCount++;
-  if (turnCount < NUDGE_INTERVAL) return;
-  turnCount = 0;
-
-  const messages = await listMessages(sessionId);
-  const recentMessages = messages.slice(-10);
-  const extracted = extractMemoryFromMessages(recentMessages);
-
-  for (const item of extracted) {
-    await addL3Memory(item.content, item.type, sessionId);
-  }
-
-  await consolidateMemory();
+  return;
 }
 
-function extractMemoryFromMessages(messages: ChatMessage[]): { content: string; type: string }[] {
-  const extracted: { content: string; type: string }[] = [];
-  const keywords = ['记住', '我叫', '我的名字', '我住', '我喜欢', '偏好', '设置', '配置'];
-
-  for (const msg of messages) {
-    if (msg.role !== 'user') continue;
-    const content = msg.content || '';
-    for (const kw of keywords) {
-      if (content.includes(kw)) {
-        extracted.push({ content: content.slice(0, 500), type: 'fact' });
-        break;
-      }
-    }
-  }
-
-  return extracted;
-}
-
-async function consolidateMemory(): Promise<void> {
-  const result = await getDb().query(
-    'SELECT id, content, memory_type, importance FROM episodic_memory WHERE is_active = 1 ORDER BY importance DESC, created_at DESC'
-  );
-  const memories = result.rows;
-  const seen = new Set<string>();
-  const toDeactivate: string[] = [];
-
-  for (const mem of memories) {
-    const key = mem.content.toLowerCase().replace(/\s+/g, '');
-    if (seen.has(key)) {
-      toDeactivate.push(mem.id);
-    } else {
-      seen.add(key);
-    }
-  }
-
-  for (const id of toDeactivate) {
-    await getDb().query('UPDATE episodic_memory SET is_active = 0 WHERE id = $1', [id]);
-  }
-}

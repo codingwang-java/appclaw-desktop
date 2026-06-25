@@ -7,7 +7,10 @@ import type {
   WorkspaceConfig,
   LLMConfig,
   ToolConfirmRequest,
-  MCPServerConfig
+  MCPServerConfig,
+  AgentConfig,
+  CreateAgentRequest,
+  UpdateAgentRequest
 } from '../src/shared/types';
 
 const api = {
@@ -30,7 +33,7 @@ const api = {
   },
   session: {
     list: (): Promise<Session[]> => ipcRenderer.invoke('session:list'),
-    create: (title: string): Promise<Session> => ipcRenderer.invoke('session:create', title),
+    create: (title: string, agentId?: string): Promise<Session> => ipcRenderer.invoke('session:create', title, agentId),
     delete: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('session:delete', sessionId)
   },
   message: {
@@ -91,6 +94,14 @@ const api = {
       ipcRenderer.on('update:error', handler);
       return () => ipcRenderer.removeListener('update:error', handler);
     }
+  },
+  agent: {
+    list: (): Promise<AgentConfig[]> => ipcRenderer.invoke('agent:list'),
+    get: (agentId: string): Promise<AgentConfig> => ipcRenderer.invoke('agent:get', agentId),
+    create: (data: CreateAgentRequest): Promise<AgentConfig> => ipcRenderer.invoke('agent:create', data),
+    update: (agentId: string, data: UpdateAgentRequest): Promise<AgentConfig> => ipcRenderer.invoke('agent:update', agentId, data),
+    delete: (agentId: string): Promise<boolean> => ipcRenderer.invoke('agent:delete', agentId),
+    toggleSkill: (agentId: string, skillId: string): Promise<boolean> => ipcRenderer.invoke('agent:skills:toggle', agentId, skillId)
   }
 };
 

@@ -1,11 +1,14 @@
 export interface AgentConfig {
   id: string;
   name: string;
+  description?: string;
+  avatar?: string;
   model: string;
   systemPrompt: string;
   temperature: number;
   tools: string[];
   toolPermissions: Record<string, ToolPermission>;
+  skills?: string[];
 }
 
 export interface ToolPermission {
@@ -14,6 +17,46 @@ export interface ToolPermission {
   allowlist?: string[];
   blocklist?: string[];
   sandboxPath?: string;
+}
+
+export interface AgentSkill {
+  id: string;
+  agentId: string;
+  skillId: string;
+  enabled: boolean;
+  priority: number;
+}
+
+export interface CreateAgentRequest {
+  name: string;
+  description?: string;
+  avatar?: string;
+  model?: string;
+  systemPrompt?: string;
+  temperature?: number;
+  tools?: string[];
+}
+
+export interface UpdateAgentRequest {
+  name?: string;
+  description?: string;
+  avatar?: string;
+  model?: string;
+  systemPrompt?: string;
+  temperature?: number;
+  tools?: string[];
+}
+
+export interface AgentMemoryRequest {
+  agentId: string;
+  content: string;
+  memoryType?: string;
+}
+
+export interface AgentSkillRequest {
+  agentId: string;
+  skillId: string;
+  enabled?: boolean;
 }
 
 export interface ChatMessage {
@@ -136,7 +179,18 @@ export type IpcChannel =
   | 'tool:confirm:request'
   | 'tool:confirm:response'
   | 'tool:list'
-  | 'app:log';
+  | 'app:log'
+  | 'agent:list'
+  | 'agent:get'
+  | 'agent:create'
+  | 'agent:update'
+  | 'agent:delete'
+  | 'agent:skills:list'
+  | 'agent:skills:add'
+  | 'agent:skills:remove'
+  | 'agent:skills:toggle'
+  | 'agent:memory:search'
+  | 'agent:memory:add';
 
 export interface ChatSendPayload {
   sessionId: string;

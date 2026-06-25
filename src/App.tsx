@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest, SkillInfo } from './shared/types';
+import type { ChatMessage, Session, LLMConfig, ToolConfirmRequest, SkillInfo, AgentConfig, CreateAgentRequest, UpdateAgentRequest } from './shared/types';
 
 const SUGGESTIONS = [
   '帮我列出当前目录下有哪些文件',
@@ -93,6 +93,16 @@ export default function App() {
   const [newSkill, setNewSkill] = useState({ name: '', trigger: '', description: '', type: 'declarative' as 'declarative' | 'code', systemPrompt: '' });
   const [skillCreating, setSkillCreating] = useState(false);
 
+  // Agent 管理
+  const [agentList, setAgentList] = useState<AgentConfig[]>([]);
+  const [activeAgentId, setActiveAgentId] = useState<string>('default-agent');
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [showAgentSkillsModal, setShowAgentSkillsModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
+  const [newAgent, setNewAgent] = useState<CreateAgentRequest>({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
+  const [agentCreating, setAgentCreating] = useState(false);
+  const [agentUpdating, setAgentUpdating] = useState(false);
+
   useEffect(() => { loadInitialData(); setupStreamListener(); setupConfirmListener(); setupUpdateListener(); }, []);
   useEffect(() => { if (activeSessionId) loadMessages(activeSessionId); }, [activeSessionId]);
   useEffect(() => { scrollToBottom(); }, [messages, streamingDeltas]);
@@ -106,6 +116,7 @@ export default function App() {
       const llm = await window.api.llm.getConfig();
       setLlmConfig(llm);
       if (!llm.apiKey) setView('settings');
+      await loadAgentList();
     } catch (e) { console.error(e); }
   }
 
@@ -152,7 +163,7 @@ export default function App() {
   async function handleNewSession() {
     try {
       const title = '新对话 ' + new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const s = await window.api.session.create(title);
+      const s = await window.api.session.create(title, activeAgentId);
       setSessions((prev) => [s, ...prev]);
       setActiveSessionId(s.id);
       setMessages([]);
@@ -212,7 +223,7 @@ export default function App() {
       setMessages((prev) => [...prev, userMsg]);
       const assistantMsg: ChatMessage = { id: 'a_' + Date.now(), sessionId: activeSessionId, role: 'assistant', content: '', createdAt: new Date().toISOString() };
       setMessages((prev) => [...prev, assistantMsg]);
-      await window.api.chat.send({ sessionId: activeSessionId, message: text, agentId: 'default-agent' });
+      await window.api.chat.send({ sessionId: activeSessionId, message: text, agentId: activeAgentId });
       await loadMessages(activeSessionId);
     } catch (e) { console.error(e); } finally { setIsLoading(false); }
   }
@@ -302,6 +313,69 @@ export default function App() {
   }
 
   function scrollToBottom() { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }
+
+  // Agent 管理函数
+  async function loadAgentList() {
+    try { setAgentList(await window.api.agent.list()); } catch (e) { console.error(e); }
+  }
+
+  async function handleCreateAgent() {
+    if (!newAgent.name.trim()) return;
+    setAgentCreating(true);
+    try {
+      await window.api.agent.create(newAgent);
+      setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
+      setShowAgentModal(false);
+      await loadAgentList();
+    } catch (e) { console.error(e); } finally { setAgentCreating(false); }
+  }
+
+  async function handleUpdateAgent() {
+    if (!editingAgent || !newAgent.name.trim()) return;
+    setAgentUpdating(true);
+    try {
+      await window.api.agent.update(editingAgent.id, newAgent);
+      setEditingAgent(null);
+      setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] });
+      setShowAgentModal(false);
+      await loadAgentList();
+    } catch (e) { console.error(e); } finally { setAgentUpdating(false); }
+  }
+
+  async function handleDeleteAgent(agentId: string) {
+    if (agentId === 'default-agent') return;
+    if (!confirm('确定删除这个 Agent？所有相关对话和记忆将被删除。')) return;
+    try {
+      await window.api.agent.delete(agentId);
+      if (activeAgentId === agentId) setActiveAgentId('default-agent');
+      await loadAgentList();
+    } catch (e) { console.error(e); }
+  }
+
+  async function handleToggleAgentSkill(agentId: string, skillId: string) {
+    try {
+      await window.api.agent.toggleSkill(agentId, skillId);
+      await loadAgentList();
+    } catch (e) { console.error(e); }
+  }
+
+  function openEditAgent(agent: AgentConfig) {
+    setEditingAgent(agent);
+    setNewAgent({
+      name: agent.name,
+      description: agent.description || '',
+      model: agent.model,
+      systemPrompt: agent.systemPrompt,
+      temperature: agent.temperature,
+      tools: agent.tools
+    });
+    setShowAgentModal(true);
+  }
+
+  function openAgentSkills(agent: AgentConfig) {
+    setEditingAgent(agent);
+    setShowAgentSkillsModal(true);
+  }
 
   function renderMessage(msg: ChatMessage, index: number) {
     if (msg.role === 'tool') {
@@ -531,6 +605,53 @@ export default function App() {
                 <p className="skill-hint">提示：在对话中输入 <code>/命令</code> 即可触发 Skill</p>
               </SettingsSection>
 
+              <SettingsSection title="Agents">
+                <div className="agent-list">
+                  {agentList.length === 0 ? (
+                    <div className="empty-hint">暂无 Agents</div>
+                  ) : (
+                    agentList.map((agent) => (
+                      <div key={agent.id} className="agent-item">
+                        <div className="agent-info">
+                          <div className="agent-name">
+                            {agent.name}
+                            {agent.id === 'default-agent' && <span className="agent-default">默认</span>}
+                          </div>
+                          <div className="agent-desc">{agent.description || '暂无描述'}</div>
+                          <div className="agent-model">{agent.model}</div>
+                          {agent.skills && agent.skills.length > 0 && (
+                            <div className="agent-skills">
+                              <span>已关联 Skills:</span>
+                              {agent.skills.map((skillName) => (
+                                <span key={skillName} className="agent-skill-tag">{skillName}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="agent-actions">
+                          <button className="agent-btn agent-btn-skills" onClick={() => openAgentSkills(agent)} title="管理 Skills">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                          </button>
+                          {agent.id !== 'default-agent' && (
+                            <button className="agent-btn agent-btn-edit" onClick={() => openEditAgent(agent)} title="编辑">
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M12 2H6a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V4a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.2"/><path d="M9 2v5h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                            </button>
+                          )}
+                          {agent.id !== 'default-agent' && (
+                            <button className="agent-btn agent-btn-del" onClick={() => handleDeleteAgent(agent.id)} title="删除">
+                              <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="btn-row">
+                  <button className="btn-primary" onClick={() => { setEditingAgent(null); setNewAgent({ name: '', description: '', model: 'gpt-4o-mini', systemPrompt: '', temperature: 0.7, tools: [] }); setShowAgentModal(true); }}>创建 Agent</button>
+                </div>
+              </SettingsSection>
+
               <SettingsSection title="关于 AppClaw">
                 <p className="about-text">桌面端 AI 助手，支持对话式交互、文件系统读写、浏览器搜索、命令行执行、启动桌面程序，以及长期记忆（PGlite 本地存储）。所有数据保存在 ~/.appclaw/ 目录下。</p>
               </SettingsSection>
@@ -539,9 +660,21 @@ export default function App() {
             <>
               <div className="chat-top">
                 <div className="chat-top-title">{activeTitle}</div>
-                <div className={`status-dot${llmConfig?.apiKey ? ' on' : ''}`}>
-                  <span className="dot" />
-                  {llmConfig?.apiKey ? `${llmConfig.model || '已连接'}` : '未配置'}
+                <div className="chat-top-right">
+                  <div className="agent-selector">
+                    <select value={activeAgentId} onChange={(e) => setActiveAgentId(e.target.value)}>
+                      {agentList.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                    <button className="agent-settings-btn" onClick={() => setView('settings')} title="管理 Agents">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.2"/><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                    </button>
+                  </div>
+                  <div className={`status-dot${llmConfig?.apiKey ? ' on' : ''}`}>
+                    <span className="dot" />
+                    {llmConfig?.apiKey ? `${llmConfig.model || '已连接'}` : '未配置'}
+                  </div>
                 </div>
               </div>
 
@@ -594,6 +727,91 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Agent 创建/编辑 模态框 */}
+      {showAgentModal && (
+        <div className="modal-overlay" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{editingAgent ? '编辑 Agent' : '创建 Agent'}</h3>
+              <button className="modal-close" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>
+                <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="field">
+                <label>Agent 名称</label>
+                <input value={newAgent.name} onChange={(e) => setNewAgent({ ...newAgent, name: e.target.value })} placeholder="例如：办公助手" />
+              </div>
+              <div className="field">
+                <label>描述</label>
+                <input value={newAgent.description} onChange={(e) => setNewAgent({ ...newAgent, description: e.target.value })} placeholder="简要描述这个 Agent 的功能" />
+              </div>
+              <div className="field">
+                <label>模型</label>
+                <input value={newAgent.model} onChange={(e) => setNewAgent({ ...newAgent, model: e.target.value })} placeholder="gpt-4o-mini" />
+              </div>
+              <div className="field">
+                <label>温度</label>
+                <input type="number" step="0.1" min="0" max="2" value={newAgent.temperature} onChange={(e) => setNewAgent({ ...newAgent, temperature: parseFloat(e.target.value) })} />
+              </div>
+              <div className="field">
+                <label>系统提示词</label>
+                <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent({ ...newAgent, systemPrompt: e.target.value })} placeholder="设置这个 Agent 的角色和行为..." rows={6} />
+              </div>
+              <div className="field">
+                <label>可用工具（逗号分隔）</label>
+                <input value={newAgent.tools.join(',')} onChange={(e) => setNewAgent({ ...newAgent, tools: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })} placeholder="file_read, file_write, web_search, run_command, open_app" />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-cancel" onClick={() => { setShowAgentModal(false); setEditingAgent(null); }}>取消</button>
+              <button className="btn-primary" onClick={editingAgent ? handleUpdateAgent : handleCreateAgent} disabled={(agentCreating || agentUpdating) || !newAgent.name.trim()}>
+                {agentCreating || agentUpdating ? '保存中...' : (editingAgent ? '保存修改' : '创建 Agent')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Agent Skills 关联 模态框 */}
+      {showAgentSkillsModal && editingAgent && (
+        <div className="modal-overlay" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{editingAgent.name} - 管理 Skills</h3>
+              <button className="modal-close" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>
+                <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 2l12 12M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="skill-assign-list">
+                {skillList.length === 0 ? (
+                  <div className="empty-hint">暂无 Skills，请先创建</div>
+                ) : (
+                  skillList.map((skill) => {
+                    const isAssigned = editingAgent.skills?.includes(skill.id) || false;
+                    return (
+                      <div key={skill.id} className={`skill-assign-item${isAssigned ? ' assigned' : ''}`}>
+                        <div className="skill-assign-info">
+                          <div className="skill-assign-name">{skill.name}</div>
+                          <div className="skill-assign-desc">{skill.description}</div>
+                        </div>
+                        <button className={`skill-assign-toggle${isAssigned ? ' active' : ''}`} onClick={() => handleToggleAgentSkill(editingAgent!.id, skill.id)}>
+                          {isAssigned ? '已关联' : '关联'}
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-primary" onClick={() => { setShowAgentSkillsModal(false); setEditingAgent(null); }}>完成</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
