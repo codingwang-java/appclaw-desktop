@@ -12,7 +12,10 @@ import {
   getAgent,
   logToolExecution,
   addMemory,
-  triggerNudge
+  triggerNudge,
+  getAgentSkillIds,
+  renameSession,
+  listMessages
 } from './memory-service';
 import {
   callTool,
@@ -28,7 +31,9 @@ const pendingConfirms = new Map<string, { resolve: (approved: boolean) => void; 
 export async function sendChatMessage(
   sessionId: string,
   userMessage: string,
-  agentId: string
+  agentId: string,
+  skillId?: string,
+  skillArgs?: Record<string, string>
 ): Promise<ChatMessage> {
   const agent = (await getAgent(agentId)) || defaultAgent();
 
@@ -47,7 +52,7 @@ export async function sendChatMessage(
     pending: true
   } as any);
 
-  await runAgentTurn(sessionId, agent, assistantId, userMessage);
+  await runAgentTurn(sessionId, agent, assistantId, userMessage, 0, skillId, skillArgs);
 
   const finalMessages = await import('./memory-service').then((m) => m.listMessages(sessionId));
   const assistantMsg = finalMessages.find((m) => m.id === assistantId) || finalMessages[finalMessages.length - 1];
@@ -59,19 +64,74 @@ async function runAgentTurn(
   agent: AgentConfig,
   assistantMessageId: string,
   userQuery: string,
-  depth: number = 0
+  depth: number = 0,
+  skillId?: string,
+  skillArgs?: Record<string, string>
 ): Promise<void> {
   if (depth > 6) return;
 
   const win = getMainWindow();
   const contextMessages = await buildContextMessages(sessionId, userQuery, agent.id);
-  const tools = getToolDefinitions(agent.tools);
+
+  let systemPrompt = agent.systemPrompt;
+  let enabledTools = [...agent.tools];
+
+  // 1. 如果是通过 /command 显式指定运行某技能
+  if (skillId) {
+    const { getSkillMeta, getSkillSystemPrompt } = await import('./skill-manager');
+    const meta = await getSkillMeta(skillId);
+    if (meta) {
+      enabledTools = meta.tools || [];
+      const rawPrompt = await getSkillSystemPrompt(skillId);
+      if (rawPrompt) {
+        let promptTemplate = rawPrompt.startsWith('DECLARATIVE:') ? rawPrompt.slice(12) : rawPrompt;
+        if (skillArgs) {
+          for (const [k, v] of Object.entries(skillArgs)) {
+            promptTemplate = promptTemplate.replace(new RegExp(`{${k}}`, 'g'), v);
+          }
+        }
+        systemPrompt = promptTemplate;
+      }
+    }
+  } else {
+    // 2. 普通对话：自动集成 Agent 关联的所有技能
+    try {
+      const linkedSkillIds = await getAgentSkillIds(agent.id);
+      const { getSkillMeta, getSkillSystemPrompt } = await import('./skill-manager');
+      const skillPrompts: string[] = [];
+
+      for (const linkedId of linkedSkillIds) {
+        const meta = await getSkillMeta(linkedId);
+        if (!meta || !meta.enabled) continue;
+
+        if (meta.type === 'code') {
+          // 代码技能转换为 `skill_${id}` 的自定义 MCP Tool
+          enabledTools.push(`skill_${meta.id}`);
+        } else if (meta.type === 'declarative') {
+          // 声明式技能拼接至 System Prompt 指引
+          const rawPrompt = await getSkillSystemPrompt(meta.id);
+          if (rawPrompt) {
+            const promptText = rawPrompt.startsWith('DECLARATIVE:') ? rawPrompt.slice(12) : rawPrompt;
+            skillPrompts.push(`### 关联技能: ${meta.name} (触发词: ${meta.trigger})\n${promptText}`);
+          }
+        }
+      }
+
+      if (skillPrompts.length > 0) {
+        systemPrompt += `\n\n你已关联并可以使用以下技能指导你的回复：\n\n${skillPrompts.join('\n\n')}`;
+      }
+    } catch (err) {
+      console.error('加载关联技能失败:', err);
+    }
+  }
+
+  const tools = getToolDefinitions(enabledTools);
 
   let fullContent = '';
   let currentToolCalls: any[] = [];
 
   const { content, toolCalls } = await chat({
-    systemPrompt: agent.systemPrompt,
+    systemPrompt: systemPrompt,
     messages: contextMessages,
     model: agent.model,
     temperature: agent.temperature,
@@ -107,10 +167,10 @@ async function runAgentTurn(
         tool_call_id: tc.id
       } as any);
     }
-    await runAgentTurn(sessionId, agent, assistantMessageId, userQuery, depth + 1);
+    await runAgentTurn(sessionId, agent, assistantMessageId, userQuery, depth + 1, skillId, skillArgs);
   } else {
     if (!fullContent.trim()) {
-      await updateAssistantMessage(sessionId, assistantMessageId, '抱歉，我没有得到有效的响应。请检查 API Key 和网络连接。', []);
+      await updateAssistantMessage(sessionId, assistantMessageId, '抱歉，我没有得到有效的响应。请检查 API Key 和 network 连接。', []);
     }
 
     const maybeExtract = shouldExtractMemory(userQuery, fullContent);
@@ -118,7 +178,10 @@ async function runAgentTurn(
       addMemory(maybeExtract, 'fact').catch(() => {});
     }
 
-    triggerNudge(sessionId).catch(() => {});
+    triggerNudge(sessionId, agent.id).catch(() => {});
+
+    // 会话智能重命名（3轮对话后触发）
+    autoRenameSession(sessionId, agent.id).catch(() => {});
 
     win?.webContents.send('chat:stream', {
       messageId: assistantMessageId,
@@ -232,6 +295,33 @@ function shouldExtractMemory(query: string, response: string): string | null {
     }
   }
   return null;
+}
+
+async function autoRenameSession(sessionId: string, agentId: string) {
+  try {
+    const messages = await listMessages(sessionId);
+    const userMessages = messages.filter(m => m.role === 'user');
+    if (userMessages.length !== 3) return; // 只在第3轮用户消息后触发
+
+    const config = getLLMConfig();
+    if (!config.apiKey) return;
+
+    const firstTwo = userMessages.slice(0, 2).map(m => m.content).join('\n');
+    const result = await chat({
+      systemPrompt: '你是一个会话标题生成助手。根据用户的前两轮对话，生成一个简洁的中文会话标题（不超过12个字），只返回标题文本，不要包含其他内容。',
+      messages: [{ role: 'user', content: firstTwo }],
+      model: config.model || 'gpt-4o-mini',
+      temperature: 0.3
+    });
+
+    const title = result.content.trim().slice(0, 20) || '新对话';
+    await renameSession(sessionId, title);
+    
+    const win = getMainWindow();
+    if (win) {
+      win.webContents.send('session:renamed', { sessionId, title });
+    }
+  } catch { /* 静默失败 */ }
 }
 
 export function applyLLMConfig(cfg: LLMConfig) {

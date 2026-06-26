@@ -36,7 +36,12 @@ const api = {
   session: {
     list: (): Promise<Session[]> => ipcRenderer.invoke('session:list'),
     create: (title: string, agentId?: string): Promise<Session> => ipcRenderer.invoke('session:create', title, agentId),
-    delete: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('session:delete', sessionId)
+    delete: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('session:delete', sessionId),
+    onRenamed: (cb: (data: { sessionId: string; title: string }) => void) => {
+      const handler = (_e: any, data: any) => cb(data);
+      ipcRenderer.on('session:renamed', handler);
+      return () => ipcRenderer.removeListener('session:renamed', handler);
+    }
   },
   message: {
     list: (sessionId: string): Promise<ChatMessage[]> => ipcRenderer.invoke('message:list', sessionId)
@@ -53,7 +58,17 @@ const api = {
     search: (query: string, limit?: number): Promise<MemoryItem[]> =>
       ipcRenderer.invoke('memory:search', { query, limit }),
     add: (content: string, memoryType: string): Promise<boolean> =>
-      ipcRenderer.invoke('memory:add', { content, memoryType })
+      ipcRenderer.invoke('memory:add', { content, memoryType }),
+    l1: {
+      get: (): Promise<{ memory: string; user: string }> => ipcRenderer.invoke('memory:l1:get'),
+      save: (data: { memory: string; user: string }): Promise<void> => ipcRenderer.invoke('memory:l1:save', data)
+    },
+    l2: {
+      search: (query: string, limit?: number): Promise<any[]> => ipcRenderer.invoke('memory:l2:search', { query, limit })
+    },
+    list: (agentId?: string, limit?: number): Promise<MemoryItem[]> => ipcRenderer.invoke('memory:list', { agentId, limit }),
+    delete: (memoryId: string): Promise<boolean> => ipcRenderer.invoke('memory:delete', memoryId),
+    update: (id: string, content: string, importance?: number): Promise<boolean> => ipcRenderer.invoke('memory:update', { id, content, importance })
   },
   tools: {
     list: (): Promise<MCPServerConfig[]> => ipcRenderer.invoke('tool:list'),
@@ -113,6 +128,8 @@ const api = {
     save: (skillId: string, updates: Partial<SkillInfo> & { systemPrompt?: string }): Promise<boolean> => ipcRenderer.invoke('skill:save', skillId, updates),
     getPrompt: (skillId: string): Promise<string | null> => ipcRenderer.invoke('skill:getPrompt', skillId),
     exists: (skillId: string): Promise<boolean> => ipcRenderer.invoke('skill:exists', skillId),
+    export: (skillId: string): Promise<string> => ipcRenderer.invoke('skill:export', skillId),
+    import: (zipBase64: string): Promise<SkillInfo> => ipcRenderer.invoke('skill:import', zipBase64),
     marketplace: {
       popular: (): Promise<{ id: string; name: string; description: string; installs: string; topic: string; rank: number }[]> => ipcRenderer.invoke('skill:marketplace:popular'),
       search: (query: string): Promise<{ id: string; name: string; description: string; installs: string }[]> => ipcRenderer.invoke('skill:marketplace:search', query),

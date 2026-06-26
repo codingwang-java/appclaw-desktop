@@ -413,6 +413,105 @@ export async function getAgentSkills(agentId: string): Promise<string[]> {
   return skillIds.map(id => skillMap.get(id) || id);
 }
 
+export async function getAgentSkillIds(agentId: string): Promise<string[]> {
+  const result = await getDb().query(
+    'SELECT skill_id FROM agent_skills WHERE agent_id = $1 AND enabled = 1 ORDER BY priority',
+    [agentId]
+  );
+  return result.rows.map((row: any) => row.skill_id);
+}
+
+export async function getEpisodicMemory(sessionId: string, limit: number = 5): Promise<any[]> {
+  try {
+    const result = await getDb().query(
+      `SELECT id, content, memory_type as "memoryType", importance, created_at as "createdAt"
+       FROM episodic_memory
+       WHERE source_session = $1 AND is_active = 1
+       ORDER BY importance DESC, created_at DESC
+       LIMIT $2`,
+      [sessionId, limit]
+    );
+    return result.rows;
+  } catch { return []; }
+}
+
+export async function addEpisodicMemory(sessionId: string, content: string, memoryType: string = 'summary', importance: number = 3): Promise<string> {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await getDb().query(
+    'INSERT INTO episodic_memory (id, content, memory_type, importance, source_session, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, content, memoryType, importance, sessionId, now]
+  );
+  return id;
+}
+
+export async function listAllMemories(agentId?: string, limit: number = 50): Promise<MemoryItem[]> {
+  let query = `SELECT id, content, memory_type as "memoryType", importance, access_count as "accessCount", created_at as "createdAt"
+     FROM long_term_memory WHERE is_active = 1`;
+  const params: any[] = [];
+  if (agentId) {
+    query += ' AND agent_id = $1';
+    params.push(agentId);
+  }
+  query += ' ORDER BY importance DESC, created_at DESC LIMIT $' + (params.length + 1);
+  params.push(limit);
+  const result = await getDb().query<MemoryItem>(query, params);
+  return result.rows;
+}
+
+export async function deleteMemory(memoryId: string): Promise<boolean> {
+  await getDb().query('DELETE FROM long_term_memory WHERE id = $1', [memoryId]);
+  return true;
+}
+
+export async function updateMemory(memoryId: string, content: string, importance?: number): Promise<boolean> {
+  const updates: string[] = ['content = $1'];
+  const params: any[] = [content];
+  if (importance !== undefined) {
+    updates.push('importance = $2');
+    params.push(importance);
+  }
+  params.push(memoryId);
+  await getDb().query(`UPDATE long_term_memory SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
+  return true;
+}
+
+export async function renameSession(sessionId: string, title: string): Promise<void> {
+  await getDb().query('UPDATE sessions SET title = $1, updated_at = $2 WHERE id = $3', [title, new Date().toISOString(), sessionId]);
+}
+
+export async function consolidateMemories(agentId: string): Promise<number> {
+  const result = await getDb().query(
+    `SELECT id, content FROM long_term_memory WHERE agent_id = $1 AND is_active = 1 ORDER BY created_at`,
+    [agentId]
+  );
+  const memories = result.rows as any[];
+  let consolidated = 0;
+
+  for (let i = 0; i < memories.length; i++) {
+    for (let j = i + 1; j < memories.length; j++) {
+      const a = memories[i].content.toLowerCase();
+      const b = memories[j].content.toLowerCase();
+      const similarity = jaccardSimilarity(a, b);
+      if (similarity > 0.6) {
+        const merged = a.length >= b.length ? memories[i].content : memories[j].content;
+        const toDelete = a.length >= b.length ? memories[j].id : memories[i].id;
+        await getDb().query('UPDATE long_term_memory SET content = $1, importance = importance + 1 WHERE id = $2', [merged, a.length >= b.length ? memories[i].id : memories[j].id]);
+        await getDb().query('UPDATE long_term_memory SET is_active = 0 WHERE id = $1', [toDelete]);
+        consolidated++;
+      }
+    }
+  }
+  return consolidated;
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const setA = new Set(a.split(/\s+/));
+  const setB = new Set(b.split(/\s+/));
+  const intersection = new Set([...setA].filter(x => setB.has(x)));
+  return intersection.size / (setA.size + setB.size - intersection.size);
+}
+
 export async function addAgentSkill(agentId: string, skillId: string): Promise<void> {
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -492,38 +591,115 @@ export async function searchL3(query: string, limit: number = 5): Promise<Memory
 }
 
 export async function loadL1Memory(): Promise<{ memory: string; user: string }> {
-  return { memory: '', user: '' };
+  const defaultWorkspaceDir = path.join(homedir(), '.appclaw', 'workspaces', 'default');
+  const memoryPath = path.join(defaultWorkspaceDir, 'MEMORY.md');
+  const userPath = path.join(defaultWorkspaceDir, 'USER.md');
+  
+  let memory = '';
+  let user = '';
+  
+  try {
+    if (fs.existsSync(memoryPath)) {
+      memory = fs.readFileSync(memoryPath, 'utf-8');
+    }
+    if (fs.existsSync(userPath)) {
+      user = fs.readFileSync(userPath, 'utf-8');
+    }
+  } catch (err) {
+    console.error('Failed to load L1 memory:', err);
+  }
+  
+  return { memory, user };
 }
 
 export async function saveL1Memory(data: { memory: string; user: string }): Promise<void> {
-  return;
+  const defaultWorkspaceDir = path.join(homedir(), '.appclaw', 'workspaces', 'default');
+  if (!fs.existsSync(defaultWorkspaceDir)) {
+    fs.mkdirSync(defaultWorkspaceDir, { recursive: true });
+  }
+  const memoryPath = path.join(defaultWorkspaceDir, 'MEMORY.md');
+  const userPath = path.join(defaultWorkspaceDir, 'USER.md');
+  
+  try {
+    fs.writeFileSync(memoryPath, data.memory || '', 'utf-8');
+    fs.writeFileSync(userPath, data.user || '', 'utf-8');
+  } catch (err) {
+    console.error('Failed to save L1 memory:', err);
+  }
 }
 
 export async function searchL2(query: string, limit: number = 3): Promise<any[]> {
-  return [];
+  try {
+    const result = await getDb().query<any>(
+      `SELECT id, session_id as "sessionId", role, content, created_at as "createdAt"
+       FROM messages
+       WHERE role IN ('user', 'assistant') AND content IS NOT NULL AND content != ''
+         AND (
+           to_tsvector('simple', content) @@ plainto_tsquery('simple', $1)
+           OR content LIKE $2
+         )
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [query, `%${query}%`, limit]
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Search L2 memory failed:', err);
+    return [];
+  }
 }
 
 export async function buildContextMessages(sessionId: string, currentQuery: string, agentId?: string): Promise<{ role: string; content: string; source?: string }[]> {
   const context: { role: string; content: string; source?: string }[] = [];
+
+  // L1: 核心记忆（MEMORY.md + USER.md），每次对话都注入
+  const l1 = await loadL1Memory();
+  if (l1.memory.trim()) {
+    context.push({ role: 'system', content: `### 项目记忆 (MEMORY.md)\n${l1.memory}`, source: 'l1-memory' });
+  }
+  if (l1.user.trim()) {
+    context.push({ role: 'system', content: `### 用户信息 (USER.md)\n${l1.user}`, source: 'l1-user' });
+  }
+
+  // L2: 全文检索历史消息
+  if (currentQuery.trim()) {
+    const l2Results = await searchL2(currentQuery, 3);
+    if (l2Results.length > 0) {
+      const l2Content = l2Results.map((r: any) => `[${r.role}] ${(r.content || '').slice(0, 300)}`).join('\n---\n');
+      context.push({ role: 'system', content: `### 历史相关对话\n${l2Content}`, source: 'l2-search' });
+    }
+  }
+
+  // 最近消息
   const messages = await listMessages(sessionId);
   const recentMessages = messages.slice(-10);
-  
   for (const msg of recentMessages) {
     context.push({ role: msg.role, content: msg.content || '', source: 'session' });
   }
 
+  // L4: 情景记忆（当前会话摘要）
+  if (messages.length >= 6) {
+    const episodic = await getEpisodicMemory(sessionId, 2);
+    if (episodic.length > 0) {
+      const epContent = episodic.map((e: any) => `[${e.memoryType}] ${e.content}`).join('\n');
+      context.push({ role: 'system', content: `### 会话情景记忆\n${epContent}`, source: 'l4-episodic' });
+    }
+  }
+
+  // L3: Agent 长期记忆
   if (agentId) {
     const agentL3Results = await searchAgentMemory(agentId, currentQuery, 3);
     if (agentL3Results.length > 0) {
       const l3Content = agentL3Results.map(r => `[${r.memoryType}] ${r.content}`).join('\n');
-      context.push({ role: 'system', content: `--- Agent 记忆 ---${l3Content}`, source: 'agent-l3' });
+      context.push({ role: 'system', content: `### Agent 长期记忆\n${l3Content}`, source: 'agent-l3' });
     }
   }
 
+  // L3: 全局长期记忆
   const globalL3Results = await searchL3(currentQuery, 3);
   if (globalL3Results.length > 0) {
     const l3Content = globalL3Results.map(r => `[${r.memoryType}] ${r.content}`).join('\n');
-    context.push({ role: 'system', content: `--- 长期记忆 ---${l3Content}`, source: 'global-l3' });
+    context.push({ role: 'system', content: `### 全局长期记忆\n${l3Content}`, source: 'global-l3' });
   }
 
   return context;
@@ -539,7 +715,78 @@ export async function logToolExecution(sessionId: string, toolName: string, args
   );
 }
 
-export async function triggerNudge(sessionId: string): Promise<void> {
-  return;
+export async function triggerNudge(sessionId: string, agentId?: string): Promise<void> {
+  try {
+    const messages = await listMessages(sessionId);
+    if (messages.length < 6) return;
+
+    // 检查是否最近已经执行过 nudge
+    const lastNudge = await getDb().query(
+      `SELECT created_at FROM episodic_memory WHERE source_session = $1 AND memory_type = 'nudge' ORDER BY created_at DESC LIMIT 1`,
+      [sessionId]
+    );
+    if (lastNudge.rows.length > 0) {
+      const lastTime = new Date((lastNudge.rows[0] as any).created_at).getTime();
+      if (Date.now() - lastTime < 5 * 60 * 1000) return; // 5分钟内不重复
+    }
+
+    // 提取最近6条消息用于分析
+    const recentMessages = messages.slice(-6);
+    const conversationText = recentMessages
+      .map(m => `[${m.role}]: ${(m.content || '').slice(0, 500)}`)
+      .join('\n');
+
+    // 尝试用 LLM 提取关键信息
+    const facts = await extractFactsWithLLM(conversationText);
+    if (facts.length > 0) {
+      for (const fact of facts) {
+        await addEpisodicMemory(sessionId, fact, 'nudge', 3);
+        if (agentId) {
+          await addAgentMemory(agentId, fact, 'fact');
+        }
+      }
+    }
+
+    // 记录 nudge 标记
+    await addEpisodicMemory(sessionId, `nudge:${Date.now()}`, 'nudge', 1);
+
+    // 合并重复记忆
+    if (agentId) {
+      await consolidateMemories(agentId);
+    }
+  } catch (err) {
+    console.error('Nudge failed:', err);
+  }
+}
+
+async function extractFactsWithLLM(conversationText: string): Promise<string[]> {
+  try {
+    const { chat, getLLMConfig } = await import('./llm-provider');
+    const config = getLLMConfig();
+    if (!config.apiKey) return [];
+
+    const result = await chat({
+      systemPrompt: `你是一个信息提取助手。从对话中提取用户的关键信息，以 JSON 数组格式返回。每个元素是一条事实，格式：{"fact": "事实内容", "type": "fact|preference|instruction"}。
+
+提取规则：
+- 用户个人信息（姓名、年龄、职业、地点等）
+- 用户偏好（喜欢、不喜欢、习惯等）
+- 用户指令（要求记住的重要事项）
+- 只提取确定性高的事实，不要猜测
+- 如果没有可提取的事实，返回空数组 []
+
+请只返回 JSON 数组，不要包含其他文字。`,
+      messages: [{ role: 'user', content: conversationText }],
+      model: config.model || 'gpt-4o-mini',
+      temperature: 0.1
+    });
+
+    const jsonMatch = result.content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+    const items = JSON.parse(jsonMatch[0]);
+    return items.map((i: any) => `[${i.type}] ${i.fact}`);
+  } catch {
+    return [];
+  }
 }
 

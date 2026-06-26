@@ -74,7 +74,7 @@ function App() {
     })();
   }, []);
 
-  // Stream listener
+// Stream listener
   useEffect(() => {
     window.api.chat.onStream((chunk) => {
       if (chunk.done) {
@@ -260,7 +260,7 @@ function App() {
     setMarketplaceLoading(false);
   };
 
-  const loadPopularMarketplace = async () => {
+const loadPopularMarketplace = async () => {
     setMarketplaceLoading(true);
     setMarketplaceQuery('');
     try {
@@ -297,6 +297,8 @@ function App() {
     }
     setTestLoading(false);
   };
+
+  const activeTitle = sessions.find((s) => s.id === activeSessionId)?.title || 'AppClaw';
 
   // ---- Render ----
   return (
