@@ -21,7 +21,11 @@ import {
   removeAgentSkill,
   toggleAgentSkill,
   searchAgentMemory,
-  addAgentMemory
+  addAgentMemory,
+  listAllMemories,
+  deleteMemory,
+  updateMemory,
+  renameSession
 } from './services/memory-service';
 import {
   getWorkspace,
@@ -33,7 +37,7 @@ import {
 import { sendChatMessage, resolveToolConfirmation, applyLLMConfig } from './services/agent-orchestrator';
 import { listServers } from './services/mcp-manager';
 import { checkForUpdates, downloadUpdate, quitAndInstall } from './services/update-service';
-import { listSkills, executeSkill, deleteSkill, createSkill, saveSkill, getSkillSystemPrompt, skillExists } from './services/skill-manager';
+import { listSkills, executeSkill, deleteSkill, createSkill, saveSkill, getSkillSystemPrompt, skillExists, exportSkill, importSkill } from './services/skill-manager';
 import type { ChatSendPayload, LLMConfig, WorkspaceConfig } from '../src/shared/types';
 
 export function registerIpcHandlers() {
@@ -88,7 +92,7 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('chat:send', async (_e, payload: ChatSendPayload) => {
-    return sendChatMessage(payload.sessionId, payload.message, payload.agentId || 'default-agent');
+    return sendChatMessage(payload.sessionId, payload.message, payload.agentId || 'default-agent', payload.skillId, payload.skillArgs);
   });
 
   ipcMain.handle('memory:search', async (_e, { query, limit }: { query: string; limit?: number }) => {
@@ -103,6 +107,10 @@ export function registerIpcHandlers() {
   ipcMain.handle('memory:l2:search', async (_e, { query, limit }: { query: string; limit?: number }) => searchL2(query, limit || 3));
   ipcMain.handle('memory:l3:add', async (_e, { content, memoryType, sourceSession }: { content: string; memoryType?: string; sourceSession?: string }) => addL3Memory(content, memoryType || 'fact', sourceSession));
   ipcMain.handle('memory:l3:search', async (_e, { query, limit }: { query: string; limit?: number }) => searchL3(query, limit || 5));
+  ipcMain.handle('memory:list', async (_e, { agentId, limit }: { agentId?: string; limit?: number }) => listAllMemories(agentId, limit));
+  ipcMain.handle('memory:delete', async (_e, memoryId: string) => deleteMemory(memoryId));
+  ipcMain.handle('memory:update', async (_e, { id, content, importance }: { id: string; content: string; importance?: number }) => updateMemory(id, content, importance));
+  ipcMain.handle('session:rename', async (_e, { sessionId, title }: { sessionId: string; title: string }) => renameSession(sessionId, title));
 
   ipcMain.handle('tool:list', async () => listServers());
 
@@ -119,6 +127,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('skill:save', async (_e, skillId: string, updates: any) => saveSkill(skillId, updates));
   ipcMain.handle('skill:getPrompt', async (_e, skillId: string) => getSkillSystemPrompt(skillId));
   ipcMain.handle('skill:exists', async (_e, skillId: string) => skillExists(skillId));
+  ipcMain.handle('skill:export', async (_e, skillId: string) => exportSkill(skillId));
+  ipcMain.handle('skill:import', async (_e, zipBase64: string) => importSkill(zipBase64));
 
   // LLM 测试连接
   ipcMain.handle('llm:test', async (_e, cfg: LLMConfig) => {

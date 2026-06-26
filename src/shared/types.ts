@@ -196,4 +196,6 @@ export interface ChatSendPayload {
   sessionId: string;
   message: string;
   agentId: string;
+  skillId?: string;
+  skillArgs?: Record<string, string>;
 }

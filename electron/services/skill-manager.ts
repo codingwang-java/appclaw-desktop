@@ -92,6 +92,26 @@ export async function listSkills(): Promise<SkillInfo[]> {
   return skills;
 }
 
+export async function getSkillMeta(skillId: string): Promise<SkillInfo | null> {
+  const dirPath = path.join(getSkillsDir(), skillId);
+  const parsed = parseSKILLMarkdown(dirPath);
+  if (!parsed) return null;
+  const indexPath = path.join(dirPath, 'index.js');
+  const type: 'declarative' | 'code' = parsed.metadata.type || (fs.existsSync(indexPath) ? 'code' : 'declarative');
+  return {
+    id: skillId,
+    name: parsed.metadata.name,
+    description: parsed.metadata.description,
+    trigger: parsed.metadata.trigger,
+    type,
+    tools: parsed.metadata.tools || [],
+    parameters: parsed.metadata.parameters || [],
+    enabled: parsed.metadata.enabled !== false,
+    source: 'local',
+    installedAt: fs.existsSync(dirPath) ? fs.statSync(dirPath).mtime.toISOString() : new Date().toISOString(),
+  };
+}
+
 export async function executeSkill(skillId: string, params: Record<string, string>): Promise<SkillExecutionResult> {
   const dirPath = path.join(getSkillsDir(), skillId);
   const indexPath = path.join(dirPath, 'index.js');
@@ -100,9 +120,10 @@ export async function executeSkill(skillId: string, params: Record<string, strin
   }
   try {
     const code = fs.readFileSync(indexPath, 'utf-8');
+    const exportsObj: any = { exports: {} };
     const context = vm.createContext({
-      module: { exports: {} },
-      exports: {},
+      module: exportsObj,
+      exports: exportsObj.exports,
       require: (name: string) => {
         if (name === 'index.js') return {};
         try { return require(name); } catch { return {}; }
@@ -113,6 +134,20 @@ export async function executeSkill(skillId: string, params: Record<string, strin
       setResult: (r: any) => { (global as any).result = r; },
     });
     vm.runInContext(code, context, { timeout: 30000 });
+    
+    const finalExports = exportsObj.exports || context.module?.exports || context.exports;
+    if (finalExports && typeof finalExports.execute === 'function') {
+      const runContext = {
+        console,
+        cwd: () => process.cwd(),
+      };
+      const resultObj = await finalExports.execute(params, runContext);
+      const output = resultObj && typeof resultObj === 'object' && 'output' in resultObj
+        ? resultObj.output
+        : resultObj;
+      return { success: true, output: typeof output === 'string' ? output : JSON.stringify(output) };
+    }
+    
     const result = (vm as any).result || (context as any).result;
     return { success: true, output: typeof result === 'string' ? result : JSON.stringify(result) };
   } catch (err: any) {
@@ -194,4 +229,80 @@ export function getSkillDir(skillId: string): string {
 
 export function skillExists(skillId: string): boolean {
   return fs.existsSync(path.join(getSkillsDir(), skillId, 'SKILL.md'));
+}
+
+export async function exportSkill(skillId: string): Promise<string | null> {
+  const dirPath = path.join(getSkillsDir(), skillId);
+  if (!fs.existsSync(dirPath)) return null;
+  
+  // 使用 JSZip 打包
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+  
+  const files = fs.readdirSync(dirPath, { recursive: true }) as string[];
+  for (const f of files) {
+    const fullPath = path.join(dirPath, f);
+    const stat = fs.statSync(fullPath);
+    if (stat.isFile()) {
+      zip.file(f, fs.readFileSync(fullPath));
+    }
+  }
+  
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  return buffer.toString('base64');
+}
+
+export async function importSkill(zipBase64: string): Promise<SkillInfo | null> {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(Buffer.from(zipBase64, 'base64'));
+  
+  const parsed = await parseSkillMarkdownFromZip(zip);
+  if (!parsed) return null;
+  
+  const skillId = (parsed.metadata.name || 'imported-skill').toLowerCase().replace(/\s+/g, '-');
+  const dirPath = path.join(getSkillsDir(), skillId);
+  if (fs.existsSync(dirPath)) {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  }
+  fs.mkdirSync(dirPath, { recursive: true });
+  
+  for (const [filename, file] of Object.entries(zip.files)) {
+    if (file.dir) continue;
+    const content = await file.async('nodebuffer');
+    const targetPath = path.join(dirPath, filename);
+    const targetDir = path.dirname(targetPath);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetPath, content);
+  }
+  
+  return getSkillMeta(skillId);
+}
+
+async function parseSkillMarkdownFromZip(zip: any): Promise<ParsedSkill | null> {
+  let mdFile = zip.file('SKILL.md');
+  if (!mdFile) {
+    // 尝试找任意 SKILL.md
+    for (const [name, file] of Object.entries(zip.files) as any) {
+      if (name.endsWith('SKILL.md') || name.endsWith('skill.md')) {
+        mdFile = file;
+        break;
+      }
+    }
+  }
+  if (!mdFile) return null;
+  
+  const content = await mdFile.async('string');
+  const { metadata, body } = parseFrontmatter(content);
+  return {
+    metadata: {
+      name: metadata.name || 'imported-skill',
+      description: metadata.description || '',
+      trigger: metadata.trigger || ('/' + (metadata.name || 'imported-skill').toLowerCase().replace(/\s+/g, '-')),
+      type: metadata.type || 'declarative',
+      tools: metadata.tools || [],
+      parameters: metadata.parameters || [],
+      enabled: metadata.enabled !== false,
+    },
+    systemPrompt: body.trim(),
+  };
 }

@@ -122,6 +122,21 @@ const BUILTIN_TOOLS: Record<string, any[]> = {
           required: ['command']
         }
       }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'app_launch',
+        description: '启动一个桌面应用程序（GUI 程序），如 Steam、浏览器、Office 等。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '要启动的程序路径（如 d:/steam/steam.exe）' },
+            args: { type: 'string', description: '命令行参数（可选）' }
+          },
+          required: ['path']
+        }
+      }
     }
   ],
   browser: [
@@ -267,6 +282,44 @@ export function getToolDefinitions(enabledTools: string[]): any[] {
   for (const tool of enabledTools) {
     if (BUILTIN_TOOLS[tool]) {
       result.push(...BUILTIN_TOOLS[tool]);
+    } else if (tool.startsWith('skill_')) {
+      try {
+        const skillId = tool.substring(6);
+        const base = process.env.APPCLAW_SKILLS_DIR || path.join(homedir(), '.appclaw', 'skills');
+        const dirPath = path.join(base, skillId);
+        const mdPath = path.join(dirPath, 'SKILL.md');
+        if (fs.existsSync(mdPath)) {
+          const content = fs.readFileSync(mdPath, 'utf-8');
+          const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+          const yamlStr = match ? match[1] : '';
+          const metadata: Record<string, any> = {};
+          for (const line of yamlStr.split('\n')) {
+            const idx = line.indexOf(':');
+            if (idx < 0) continue;
+            const key = line.slice(0, idx).trim();
+            let value: any = line.slice(idx + 1).trim();
+            if (value === 'true') value = true;
+            else if (value === 'false') value = false;
+            metadata[key] = value;
+          }
+          const name = metadata.name || skillId;
+          const description = metadata.description || `执行技能 ${name}`;
+          result.push({
+            type: 'function',
+            function: {
+              name: tool,
+              description,
+              parameters: {
+                type: 'object',
+                properties: {},
+                additionalProperties: true
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.error('获取技能工具定义失败:', err);
+      }
     }
   }
   for (const [id, server] of servers) {
@@ -391,6 +444,12 @@ function handleServerResponse(instance: ServerInstance, obj: any) {
 export async function callTool(toolName: string, args: Record<string, any>): Promise<ToolResult> {
   const startTime = Date.now();
 
+  if (toolName.startsWith('skill_')) {
+    const skillId = toolName.substring(6);
+    const { executeSkill } = await import('./skill-manager');
+    const res = await executeSkill(skillId, args);
+    return { success: res.success, content: res.success ? res.output || '执行成功' : res.error || '执行失败', error: res.error };
+  }
   if (toolName.startsWith('memory_')) {
     return handleMemoryTool(toolName, args);
   }
@@ -523,6 +582,34 @@ async function handleFilesystemTool(toolName: string, args: Record<string, any>)
               resolve({ success: true, content: (stdout + stderr).slice(0, 8000) || '（命令执行成功，无输出）' });
             }
           });
+          return;
+        }
+        if (toolName === 'app_launch') {
+          if (!args.path) {
+            resolve({ success: false, content: '错误: 必须提供 path 参数', error: 'missing-args' });
+            return;
+          }
+          const { spawn } = require('child_process');
+          const normalizedPath = args.path.replace(/\//g, '\\');
+          if (!fs.existsSync(args.path) && !fs.existsSync(normalizedPath)) {
+            resolve({ success: false, content: '错误: 找不到程序路径: ' + args.path, error: 'not-found' });
+            return;
+          }
+          const cmdArgs = args.args ? `"${args.args}"` : '';
+          if (process.platform === 'win32') {
+            const cmd = `start "" "${normalizedPath}" ${cmdArgs}`;
+            exec(cmd, { timeout: 15000 }, (err: any, stdout: string, stderr: string) => {
+              if (err) {
+                resolve({ success: false, content: '启动失败: ' + (err.message || stderr), error: 'launch-failed' });
+              } else {
+                resolve({ success: true, content: `已成功启动程序: ${args.path}` });
+              }
+            });
+          } else {
+            const child = spawn(args.path, args.args ? [args.args] : [], { detached: true, stdio: 'ignore' });
+            child.unref();
+            resolve({ success: true, content: `已成功启动程序: ${args.path}` });
+          }
           return;
         }
         resolve({ success: false, content: `未知文件系统工具: ${toolName}`, error: 'unknown-tool' });
