@@ -37,7 +37,7 @@ import {
 import { sendChatMessage, resolveToolConfirmation, applyLLMConfig } from './services/agent-orchestrator';
 import { listServers } from './services/mcp-manager';
 import { checkForUpdates, downloadUpdate, quitAndInstall } from './services/update-service';
-import { listSkills, executeSkill, deleteSkill, createSkill, saveSkill, getSkillSystemPrompt, skillExists, exportSkill, importSkill } from './services/skill-manager';
+import { listSkills, executeSkill, deleteSkill, createSkill, saveSkill, getSkillSystemPrompt, skillExists, exportSkill, importSkill, searchMarketplace, installFromMarketplace } from './services/skill-manager';
 import type { ChatSendPayload, LLMConfig, WorkspaceConfig } from '../src/shared/types';
 
 export function registerIpcHandlers() {
@@ -129,6 +129,9 @@ export function registerIpcHandlers() {
   ipcMain.handle('skill:exists', async (_e, skillId: string) => skillExists(skillId));
   ipcMain.handle('skill:export', async (_e, skillId: string) => exportSkill(skillId));
   ipcMain.handle('skill:import', async (_e, zipBase64: string) => importSkill(zipBase64));
+
+  ipcMain.handle('skill:marketplace:search', async (_e, query: string) => searchMarketplace(query));
+  ipcMain.handle('skill:marketplace:install', async (_e, skillUrl: string) => installFromMarketplace(skillUrl));
 
   // LLM 测试连接
   ipcMain.handle('llm:test', async (_e, cfg: LLMConfig) => {

@@ -93,6 +93,12 @@ export default function App() {
   const [newSkill, setNewSkill] = useState({ name: '', trigger: '', description: '', type: 'declarative' as 'declarative' | 'code', systemPrompt: '' });
   const [skillCreating, setSkillCreating] = useState(false);
 
+  // Marketplace
+  const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [marketplaceSkills, setMarketplaceSkills] = useState<any[]>([]);
+  const [marketplaceSearching, setMarketplaceSearching] = useState(false);
+  const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
+
   // Agent 管理
   const [agentList, setAgentList] = useState<AgentConfig[]>([]);
   const [activeAgentId, setActiveAgentId] = useState<string>('default-agent');
@@ -358,6 +364,33 @@ export default function App() {
       await window.api.skill.delete(skillId);
       await loadSkillList();
     } catch (e) { console.error(e); }
+  }
+
+  async function handleSearchMarketplace() {
+    if (!marketplaceQuery.trim()) {
+      setMarketplaceSkills([]);
+      return;
+    }
+    setMarketplaceSearching(true);
+    try {
+      const results = await window.api.skill.marketplace.search(marketplaceQuery);
+      setMarketplaceSkills(results);
+    } catch (e) { console.error('Marketplace search error:', e); setMarketplaceSkills([]); }
+    finally { setMarketplaceSearching(false); }
+  }
+
+  async function handleInstallFromMarketplace(skill: any) {
+    setInstallingSkillId(skill.id);
+    try {
+      const result = await window.api.skill.marketplace.install(skill.url);
+      if (result) {
+        await loadSkillList();
+        setMarketplaceSkills((prev) => prev.filter((s) => s.id !== skill.id));
+      } else {
+        alert('安装失败，请检查网络连接或稍后再试');
+      }
+    } catch (e) { console.error('Marketplace install error:', e); alert('安装失败'); }
+    finally { setInstallingSkillId(null); }
   }
 
   async function handleCreateSkill() {
@@ -697,7 +730,54 @@ export default function App() {
               )}
 
               {settingsTab === 'skills' && (
-                <SettingsSection title="Skills" defaultOpen={true}>
+                <>
+                  <SettingsSection title="Skill 商店" defaultOpen={true}>
+                    <div className="marketplace-search">
+                      <input
+                        type="text"
+                        value={marketplaceQuery}
+                        onChange={(e) => setMarketplaceQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearchMarketplace(); }}
+                        placeholder="搜索 Skills，例如：code-review, translation..."
+                        className="marketplace-input"
+                      />
+                      <button
+                        className="btn-primary marketplace-search-btn"
+                        onClick={handleSearchMarketplace}
+                        disabled={marketplaceSearching}
+                      >
+                        {marketplaceSearching ? '搜索中...' : '搜索'}
+                      </button>
+                    </div>
+                    {marketplaceSkills.length > 0 && (
+                      <div className="marketplace-list">
+                        {marketplaceSkills.map((skill) => {
+                          const isInstalled = skillList.some((s) => s.id === skill.id || s.name === skill.name);
+                          return (
+                            <div key={skill.id} className="marketplace-item">
+                              <div className="marketplace-item-info">
+                                <div className="marketplace-item-name">{skill.name}</div>
+                                <div className="marketplace-item-desc">{skill.description}</div>
+                                {skill.author && <div className="marketplace-item-author">作者: {skill.author}</div>}
+                              </div>
+                              <button
+                                className={`marketplace-install-btn${isInstalled ? ' installed' : ''}`}
+                                onClick={() => !isInstalled && handleInstallFromMarketplace(skill)}
+                                disabled={isInstalled || installingSkillId === skill.id}
+                              >
+                                {isInstalled ? '已安装' : installingSkillId === skill.id ? '安装中...' : '安装'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {!marketplaceSearching && marketplaceQuery && marketplaceSkills.length === 0 && (
+                      <div className="empty-hint">未找到相关 Skill</div>
+                    )}
+                  </SettingsSection>
+
+                  <SettingsSection title="已安装的 Skills" defaultOpen={true}>
                   <div className="skill-list">
                     {skillList.length === 0 ? (
                       <div className="empty-hint">暂无已安装的 Skills</div>
@@ -781,6 +861,7 @@ export default function App() {
                   )}
                   <p className="skill-hint">提示：在对话中输入 <code>/命令</code> 即可触发 Skill</p>
                 </SettingsSection>
+                </>
               )}
 
               {settingsTab === 'system' && (

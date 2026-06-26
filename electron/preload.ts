@@ -130,7 +130,11 @@ const api = {
     getPrompt: (skillId: string): Promise<string | null> => ipcRenderer.invoke('skill:getPrompt', skillId),
     exists: (skillId: string): Promise<boolean> => ipcRenderer.invoke('skill:exists', skillId),
     export: (skillId: string): Promise<string> => ipcRenderer.invoke('skill:export', skillId),
-    import: (zipBase64: string): Promise<SkillInfo> => ipcRenderer.invoke('skill:import', zipBase64)
+    import: (zipBase64: string): Promise<SkillInfo> => ipcRenderer.invoke('skill:import', zipBase64),
+    marketplace: {
+      search: (query: string): Promise<any[]> => ipcRenderer.invoke('skill:marketplace:search', query),
+      install: (skillUrl: string): Promise<SkillInfo | null> => ipcRenderer.invoke('skill:marketplace:install', skillUrl)
+    }
   }
 };
 
