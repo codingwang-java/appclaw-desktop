@@ -86,8 +86,9 @@ declare global {
         getPrompt: (skillId: string) => Promise<string | null>;
         exists: (skillId: string) => Promise<boolean>;
         marketplace: {
+          popular: () => Promise<{ id: string; name: string; description: string; installs: string; topic: string; rank: number }[]>;
           search: (query: string) => Promise<{ id: string; name: string; description: string; installs: string }[]>;
-          install: (repoPath: string, skillName: string) => Promise<{ success: boolean; error?: string }>;
+          install: (repoPath: string, skillName: string, skillDir?: string) => Promise<{ success: boolean; error?: string }>;
         };
       };
     };

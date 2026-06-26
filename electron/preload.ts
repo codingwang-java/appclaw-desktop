@@ -114,8 +114,9 @@ const api = {
     getPrompt: (skillId: string): Promise<string | null> => ipcRenderer.invoke('skill:getPrompt', skillId),
     exists: (skillId: string): Promise<boolean> => ipcRenderer.invoke('skill:exists', skillId),
     marketplace: {
+      popular: (): Promise<{ id: string; name: string; description: string; installs: string; topic: string; rank: number }[]> => ipcRenderer.invoke('skill:marketplace:popular'),
       search: (query: string): Promise<{ id: string; name: string; description: string; installs: string }[]> => ipcRenderer.invoke('skill:marketplace:search', query),
-      install: (repoPath: string, skillName: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('skill:marketplace:install', repoPath, skillName)
+      install: (repoPath: string, skillName: string, skillDir?: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('skill:marketplace:install', repoPath, skillName, skillDir)
     }
   }
 };

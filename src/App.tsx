@@ -34,11 +34,13 @@ function App() {
 
   // Settings drawer state
   const [activeSetting, setActiveSetting] = useState<string>('llm');
-  const [drawerLevel, setDrawerLevel] = useState<1 | 2 | 3>(1);
-  const [drawerStack, setDrawerStack] = useState<{ level: 1 | 2 | 3; setting: string; data?: any }[]>([{ level: 1, setting: 'llm' }]);
+  const [drawerLevel, setDrawerLevel] = useState<1 | 2 | 3>(2);
+  const [drawerStack, setDrawerStack] = useState<{ level: 1 | 2 | 3; setting: string; data?: any }[]>([{ level: 2, setting: 'llm' }]);
   const [marketplaceSkills, setMarketplaceSkills] = useState<any[]>([]);
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [installedSkillIds, setInstalledSkillIds] = useState<Set<string>>(new Set());
+  const [installedSkillNames, setInstalledSkillNames] = useState<Set<string>>(new Set());
 
   // LLM test
   const [testResult, setTestResult] = useState<{ ok?: boolean; msg: string } | null>(null);
@@ -163,10 +165,11 @@ function App() {
   };
 
   // ---- Settings Drawer Navigation ----
-  const navigateSetting = (setting: string, level: 1 | 2 = 1) => {
+  // Click nav item -> always show content panel (level 2)
+  const navigateSetting = (setting: string) => {
     setActiveSetting(setting);
-    setDrawerLevel(level);
-    setDrawerStack(prev => [...prev.slice(0, level - 1), { level, setting, data: null }]);
+    setDrawerLevel(2);
+    setDrawerStack(prev => [{ level: 1, setting: prev[0]?.setting || 'llm' }, { level: 2, setting, data: null }]);
   };
 
   const pushDrawer = (setting: string, data?: any) => {
@@ -183,6 +186,11 @@ function App() {
     const prev = newStack[newStack.length - 1];
     setDrawerLevel(prev.level);
     setActiveSetting(prev.setting);
+    // Reset modal states when closing Layer 3
+    setShowAgentModal(false);
+    setEditingAgent(null);
+    setShowSkillModal(false);
+    setEditingSkill(null);
   };
 
   // ---- Agent actions ----
@@ -217,6 +225,8 @@ function App() {
   const loadSkills = async () => {
     const sk = await window.api.skill.list().catch(() => []);
     setLocalSkills(sk);
+    setInstalledSkillIds(new Set(sk.map(s => s.id.toLowerCase())));
+    setInstalledSkillNames(new Set(sk.map(s => s.name.toLowerCase())));
   };
 
   const saveSkill = async (skill: any) => {
@@ -250,11 +260,24 @@ function App() {
     setMarketplaceLoading(false);
   };
 
+  const loadPopularMarketplace = async () => {
+    setMarketplaceLoading(true);
+    setMarketplaceQuery('');
+    try {
+      const results = await window.api.skill.marketplace.popular();
+      setMarketplaceSkills(results);
+    } catch (e: any) {
+      setMarketplaceSkills([{ error: e.message }]);
+    }
+    setMarketplaceLoading(false);
+  };
+
   const installMarketplaceSkill = async (skill: any) => {
-    const result = await window.api.skill.marketplace.install(skill.id, skill.name);
+    const result = await window.api.skill.marketplace.install(skill.id, skill.name, skill.skillDir);
     if (result.success) {
       loadSkills();
-      searchMarketplace(marketplaceQuery);
+      if (marketplaceQuery) searchMarketplace(marketplaceQuery);
+      else loadPopularMarketplace();
     }
     return result;
   };
@@ -323,7 +346,19 @@ function App() {
             ))}
           </div>
           <div className="sidebar-foot">
-            <button className={`foot-btn ${showSettings ? 'active' : ''}`} onClick={() => { setShowSettings(!showSettings); setView('settings' as any); }}>
+            <button className={`foot-btn ${showSettings ? 'active' : ''}`} onClick={() => {
+              if (showSettings) {
+                // Reset drawer state when closing
+                setDrawerLevel(2);
+                setActiveSetting('llm');
+                setDrawerStack([{ level: 2, setting: 'llm' }]);
+                setShowAgentModal(false);
+                setEditingAgent(null);
+                setShowSkillModal(false);
+                setEditingSkill(null);
+              }
+              setShowSettings(!showSettings);
+            }}>
               <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M13.5 8a5.5 5.5 0 01-.3 1.8l1.3 1-1 1.7-1.5-.6a5.5 5.5 0 01-1.6.9L10 14H8.5l-.4-1.6a5.5 5.5 0 01-1.6-.9l-1.5.6-1-1.7 1.3-1A5.5 5.5 0 014.5 8a5.5 5.5 0 01.3-1.8l-1.3-1 1-1.7 1.5.6a5.5 5.5 0 011.6-.9L8.5 2H10l.4 1.6a5.5 5.5 0 011.6.9l1.5-.6 1 1.7-1.3 1A5.5 5.5 0 0113.5 8z" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
               Settings
             </button>
@@ -404,10 +439,10 @@ function App() {
               {/* ===== Settings Drawer Layer 2: Content ===== */}
               <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
                 <div style={{
-                  flex: drawerLevel >= 2 ? 1 : 0, overflow: 'auto',
-                  borderRight: drawerLevel >= 2 ? '1px solid var(--border)' : 'none',
-                  padding: '24px 28px', maxWidth: drawerLevel >= 2 ? 480 : '100%',
-                  transition: 'all 0.2s'
+                  flex: 1, overflow: 'auto',
+                  borderRight: drawerLevel >= 3 ? '1px solid var(--border)' : 'none',
+                  padding: '24px 28px', maxWidth: drawerLevel >= 3 ? '55%' : '100%',
+                  transition: 'all 0.25s'
                 }}>
                   {/* LLM Config */}
                   {activeSetting === 'llm' && (
@@ -443,12 +478,14 @@ function App() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
                         <div style={{ fontSize: 20, fontWeight: 700 }}>Agents</div>
                         <button className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}
-                          onClick={() => { setEditingAgent(null); setShowAgentModal(true); }}>+ New Agent</button>
+                          onClick={() => { setEditingAgent(null); pushDrawer('agent-form'); setShowAgentModal(true); }}>+ New Agent</button>
                       </div>
                       {agents.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>No agents configured</div>}
                       <div className="agent-list">
                         {agents.map(a => (
-                          <div key={a.id} className="agent-item">
+                          <div key={a.id} className={`agent-item ${activeAgentId === a.id ? 'agent-active' : ''}`}
+                            onClick={() => setActiveAgentId(a.id)}
+                            style={{ cursor: 'pointer', ...(activeAgentId === a.id ? { borderColor: 'var(--accent)', boxShadow: '0 0 0 1px var(--accent)' } : {}) }}>
                             <div className="agent-info">
                               <div className="agent-name">{a.name} {a.default && <span className="agent-default">Default</span>}</div>
                               <div className="agent-desc">{a.description}</div>
@@ -464,7 +501,7 @@ function App() {
                               <button className="agent-btn agent-btn-skills" title="Assign Skills" onClick={() => { pushDrawer('agent-skills', a); }}>
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
                               </button>
-                              <button className="agent-btn agent-btn-edit" title="Edit" onClick={() => { setEditingAgent(a); setShowAgentModal(true); }}>
+                              <button className="agent-btn agent-btn-edit" title="Edit" onClick={() => { setEditingAgent(a); pushDrawer('agent-form'); setShowAgentModal(true); }}>
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                               </button>
                               <button className="agent-btn agent-btn-del" title="Delete" onClick={() => deleteAgent(a.id)}>
@@ -484,9 +521,9 @@ function App() {
                         <div style={{ fontSize: 20, fontWeight: 700 }}>Skills</div>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <button className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}
-                            onClick={() => { setEditingSkill(null); setShowSkillModal(true); }}>+ New</button>
+                            onClick={() => { setEditingSkill(null); pushDrawer('skill-form'); setShowSkillModal(true); }}>+ New</button>
                           <button className="btn-cancel" style={{ padding: '7px 16px', fontSize: 13 }}
-                            onClick={() => { pushDrawer('marketplace'); searchMarketplace(''); }}>Marketplace</button>
+                            onClick={() => { pushDrawer('marketplace'); loadPopularMarketplace(); }}>Marketplace</button>
                         </div>
                       </div>
                       <div className="skill-list">
@@ -543,7 +580,7 @@ function App() {
                 </div>
 
                 {/* ===== Settings Drawer Level 3: Detail Panel ===== */}
-                {drawerLevel >= 2 && (
+                {drawerLevel >= 3 && (
                   <div style={{
                     flex: 1, overflow: 'auto', padding: '24px 28px',
                     background: 'var(--bg-primary)', minWidth: 0
@@ -580,6 +617,8 @@ function App() {
                         marketplaceQuery={marketplaceQuery}
                         onSearch={searchMarketplace}
                         onInstall={installMarketplaceSkill}
+                        installedSkillIds={installedSkillIds}
+                        installedSkillNames={installedSkillNames}
                       />
                     )}
 
@@ -587,6 +626,7 @@ function App() {
                     {showAgentModal && (
                       <AgentForm
                         editingAgent={editingAgent}
+                        llmConfig={llmConfig}
                         onSave={saveAgent}
                         onCancel={() => { setShowAgentModal(false); setEditingAgent(null); }}
                       />
@@ -761,13 +801,15 @@ function AgentSkillAssign({ agent, localSkills, skillSearchQuery, setSkillSearch
   );
 }
 
-function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQuery, onSearch, onInstall }: {
+function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQuery, onSearch, onInstall, installedSkillIds, installedSkillNames }: {
   marketplaceSkills: any[]; marketplaceLoading: boolean; marketplaceQuery: string;
   onSearch: (q: string) => void; onInstall: (skill: any) => Promise<any>;
+  installedSkillIds: Set<string>; installedSkillNames: Set<string>;
 }) {
   const [installing, setInstalling] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState(marketplaceQuery);
   const [resultMsg, setResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
+  const [activeTopic, setActiveTopic] = useState<string>('all');
 
   const handleInstall = async (skill: any) => {
     setInstalling(skill.name);
@@ -782,15 +824,22 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
     setTimeout(() => setResultMsg(null), 3000);
   };
 
+  // Topic filter
+  const topics = ['all', ...new Set(marketplaceSkills.filter(s => s.topic).map(s => s.topic))];
+  const filtered = activeTopic === 'all' ? marketplaceSkills : marketplaceSkills.filter(s => s.topic === activeTopic);
+  const hasRankings = marketplaceSkills.some(s => s.rank);
+
+  const topicLabels: Record<string, string> = { all: 'All', design: 'Design', coding: 'Coding', data: 'Data', devops: 'DevOps', productivity: 'Productivity' };
+
   return (
     <div>
       <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Skill Marketplace</div>
       <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-        Browse and install community skills from the skills.sh ecosystem.
+        Browse trending skills. Search skills.sh for more.
       </div>
       {/* Search bar */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20,
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
         background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
         borderRadius: 'var(--radius)', padding: '8px 14px',
         transition: 'all var(--transition)'
@@ -804,64 +853,107 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
         <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }} onClick={() => onSearch(searchInput)}>Search</button>
       </div>
 
-      {marketplaceLoading && (
-        <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontSize: 13 }}>
-          Searching marketplace...
+      {/* Topic filter chips */}
+      {hasRankings && topics.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+          {topics.map(t => (
+            <button key={t}
+              style={{
+                padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+                background: activeTopic === t ? 'var(--accent)' : 'var(--bg-tertiary)',
+                color: activeTopic === t ? '#fff' : 'var(--text-secondary)',
+                border: activeTopic === t ? 'none' : '1px solid var(--border)',
+                transition: 'all var(--transition-fast)', cursor: 'pointer'
+              }}
+              onClick={() => setActiveTopic(t)}>
+              {topicLabels[t] || t}
+            </button>
+          ))}
         </div>
       )}
 
-      {!marketplaceLoading && marketplaceSkills.length === 0 && (
+      {marketplaceLoading && (
+        <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontSize: 13 }}>
+          Loading trending skills...
+        </div>
+      )}
+
+      {!marketplaceLoading && filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 12 }}>
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
           </svg>
-          <div style={{ fontSize: 14 }}>Search for skills in the marketplace</div>
-          <div style={{ fontSize: 12, marginTop: 6 }}>Try searching "design", "react", or "testing"</div>
+          <div style={{ fontSize: 14 }}>No skills found</div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>Try a different search term or topic</div>
         </div>
       )}
 
-      {!marketplaceLoading && marketplaceSkills.filter(s => !s.error).map(s => (
-        <div key={s.name} style={{
+      {!marketplaceLoading && filtered.filter(s => !s.error).map((s, i) => (
+        <div key={s.name || i} style={{
           display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
           background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)',
           border: '1px solid var(--border)', marginBottom: 8,
           transition: 'all var(--transition-fast)'
         }}>
+          {/* Rank badge */}
+          {s.rank && (
+            <div style={{
+              width: 28, height: 28, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: s.rank <= 3 ? 'var(--accent)' : 'var(--bg-secondary)',
+              color: s.rank <= 3 ? '#fff' : 'var(--text-muted)',
+              fontSize: 12, fontWeight: 700, flexShrink: 0
+            }}>
+              {s.rank}
+            </div>
+          )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
               {s.name}
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>{s.id}</span>
+              {s.topic && <span style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-glow)', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>{topicLabels[s.topic] || s.topic}</span>}
+              {s.skillDir && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 600, background: 'rgba(52,199,89,0.15)', color: '#34c759' }}>DIRECT</span>}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>{s.description}</div>
-            {s.installs && <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 6 }}>{s.installs} installs</div>}
+            <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
+              {s.installs && <span style={{ fontSize: 11, color: 'var(--accent)' }}>⬇ {s.installs} installs</span>}
+              {s.rank && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>#{s.rank} trending</span>}
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-            <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }}
-              onClick={() => handleInstall(s)}
-              disabled={installing === s.name}>
-              {installing === s.name ? 'Installing...' : 'Install'}
-            </button>
-            {resultMsg?.id === s.name && (
-              <span style={{ fontSize: 11, color: resultMsg.success ? 'var(--green)' : 'var(--red)' }}>
-                {resultMsg.msg}
-              </span>
-            )}
+            {(() => {
+              const installed = installedSkillNames.has(s.name.toLowerCase()) || (s.skillDir && installedSkillIds.has(s.skillDir.toLowerCase()));
+              if (installed) return <span style={{ fontSize: 11, color: '#34c759', fontWeight: 600, padding: '5px 14px' }}>✓ Installed</span>;
+              return <>
+                <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }}
+                  onClick={() => handleInstall(s)}
+                  disabled={installing === s.name}>
+                  {installing === s.name ? 'Installing...' : (s.skillDir ? 'Install' : 'Try Install')}
+                </button>
+                {resultMsg?.id === s.name && (
+                  <span style={{ fontSize: 11, color: resultMsg.success ? 'var(--green)' : 'var(--red)' }}>
+                    {resultMsg.msg}
+                  </span>
+                )}
+              </>;
+            })()}
           </div>
         </div>
       ))}
       {!marketplaceLoading && marketplaceSkills.filter(s => s.error).length > 0 && (
         <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>
-          Could not fetch marketplace. The skills.sh API may not be accessible.
+          Could not fetch marketplace. Showing curated trending list instead.
         </div>
       )}
     </div>
   );
 }
 
-function AgentForm({ editingAgent, onSave, onCancel }: {
-  editingAgent: any; onSave: (agent: any) => void; onCancel: () => void;
+function AgentForm({ editingAgent, llmConfig, onSave, onCancel }: {
+  editingAgent: any; llmConfig: LLMConfig; onSave: (agent: any) => void; onCancel: () => void;
 }) {
   const [form, setForm] = useState(editingAgent || { name: '', description: '', model: '', systemPrompt: '', skills: [] });
+  const [customModel, setCustomModel] = useState(false);
+  // Derived model options from LLM config
+  const modelOptions = llmConfig.model ? [llmConfig.model, 'gpt-4o', 'gpt-4o-mini', 'gpt-4', 'gpt-3.5-turbo', 'claude-3-5-sonnet', 'claude-3-opus', 'custom'] : ['gpt-4o', 'gpt-4o-mini', 'gpt-4', 'gpt-3.5-turbo', 'claude-3-5-sonnet', 'claude-3-opus', 'custom'];
   return (
     <div>
       <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>{editingAgent ? 'Edit Agent' : 'New Agent'}</div>
@@ -875,7 +967,22 @@ function AgentForm({ editingAgent, onSave, onCancel }: {
       </div>
       <div className="field">
         <label>Model</label>
-        <input value={form.model} onChange={e => setForm(p => ({ ...p, model: e.target.value }))} placeholder="gpt-4o (leave empty for default)" />
+        {customModel ? (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={form.model} onChange={e => setForm(p => ({ ...p, model: e.target.value }))} placeholder="Enter model name..." style={{ flex: 1 }} />
+            <button className="btn-cancel" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => { setCustomModel(false); setForm(p => ({ ...p, model: '' })); }}>预设</button>
+          </div>
+        ) : (
+          <select value={form.model} onChange={e => {
+            if (e.target.value === 'custom') { setCustomModel(true); setForm(p => ({ ...p, model: '' })); }
+            else setForm(p => ({ ...p, model: e.target.value }));
+          }}>
+            <option value="">Default model</option>
+            {modelOptions.filter(m => m !== 'custom').map(m => <option key={m} value={m}>{m}{m === llmConfig.model ? ' (LLM configured)' : ''}</option>)}
+            <option value="custom">Other (type custom)...</option>
+          </select>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>LLM config model: <code>{llmConfig.model || '(not set)'}</code></div>
       </div>
       <div className="field">
         <label>System Prompt</label>

@@ -112,6 +112,7 @@ a:hover { color: var(--accent-hover); }
   border-radius: 0;
 }
 .tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn:focus-visible { outline: none; }
 .tb-close:hover { background: #e81123; color: #fff; }
 
 /* ========== Sidebar ========== */
