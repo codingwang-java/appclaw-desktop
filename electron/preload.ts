@@ -10,7 +10,9 @@ import type {
   MCPServerConfig,
   AgentConfig,
   CreateAgentRequest,
-  UpdateAgentRequest
+  UpdateAgentRequest,
+  SkillInfo,
+  SkillExecutionResult
 } from '../src/shared/types';
 
 const api = {
@@ -102,6 +104,19 @@ const api = {
     update: (agentId: string, data: UpdateAgentRequest): Promise<AgentConfig> => ipcRenderer.invoke('agent:update', agentId, data),
     delete: (agentId: string): Promise<boolean> => ipcRenderer.invoke('agent:delete', agentId),
     toggleSkill: (agentId: string, skillId: string): Promise<boolean> => ipcRenderer.invoke('agent:skills:toggle', agentId, skillId)
+  },
+  skill: {
+    list: (): Promise<SkillInfo[]> => ipcRenderer.invoke('skill:list'),
+    execute: (skillId: string, params: Record<string, string>): Promise<SkillExecutionResult> => ipcRenderer.invoke('skill:execute', skillId, params),
+    delete: (skillId: string): Promise<boolean> => ipcRenderer.invoke('skill:delete', skillId),
+    create: (skill: Omit<SkillInfo, 'installedAt'> & { systemPrompt?: string }): Promise<boolean> => ipcRenderer.invoke('skill:create', skill),
+    save: (skillId: string, updates: Partial<SkillInfo> & { systemPrompt?: string }): Promise<boolean> => ipcRenderer.invoke('skill:save', skillId, updates),
+    getPrompt: (skillId: string): Promise<string | null> => ipcRenderer.invoke('skill:getPrompt', skillId),
+    exists: (skillId: string): Promise<boolean> => ipcRenderer.invoke('skill:exists', skillId),
+    marketplace: {
+      search: (query: string): Promise<{ id: string; name: string; description: string; installs: string }[]> => ipcRenderer.invoke('skill:marketplace:search', query),
+      install: (repoPath: string, skillName: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('skill:marketplace:install', repoPath, skillName)
+    }
   }
 };
 
