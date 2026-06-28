@@ -19,7 +19,7 @@ export default defineConfig({
             sourcemap: true,
             minify: false,
             rollupOptions: {
-              external: ['@electric-sql/pglite', '@modelcontextprotocol/sdk', 'openai', 'electron-updater']
+              external: ['@electric-sql/pglite', '@modelcontextprotocol/sdk', 'openai', 'electron-updater', 'jszip']
             }
           }
         }
@@ -35,7 +35,7 @@ export default defineConfig({
             sourcemap: true,
             minify: false,
             rollupOptions: {
-              external: ['@electric-sql/pglite', '@modelcontextprotocol/sdk', 'openai', 'electron-updater']
+              external: ['@electric-sql/pglite', '@modelcontextprotocol/sdk', 'openai', 'electron-updater', 'jszip']
             }
           }
         }

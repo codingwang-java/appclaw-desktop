@@ -1,4 +1,9 @@
 import { ipcMain, BrowserWindow } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
   listSessions,
   createSession,
@@ -49,6 +54,22 @@ export function registerIpcHandlers() {
   });
   ipcMain.handle('window:close', async () => { BrowserWindow.getFocusedWindow()?.close(); });
   ipcMain.handle('window:isMaximized', async () => BrowserWindow.getFocusedWindow()?.isMaximized() ?? false);
+
+  ipcMain.handle('app:version', async () => {
+    try {
+      const pkgPath = path.join(__dirname, '..', 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        return pkg.version || '0.0.0';
+      }
+      const altPath = path.join(__dirname, '..', '..', 'package.json');
+      if (fs.existsSync(altPath)) {
+        const pkg = JSON.parse(fs.readFileSync(altPath, 'utf-8'));
+        return pkg.version || '0.0.0';
+      }
+      return '0.0.0';
+    } catch { return '0.0.0'; }
+  });
 
   ipcMain.handle('workspace:list', async () => listWorkspaces());
   ipcMain.handle('workspace:get', async () => getWorkspace());

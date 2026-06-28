@@ -370,6 +370,15 @@ a:hover { color: var(--accent-hover); }
 }
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.15; } }
 
+.msg-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  opacity: 0.6;
+  transition: opacity var(--transition);
+}
+.msg:hover .msg-time { opacity: 1; }
+
 /* ========== Tool Cards ========== */
 .msg-tool-card {
   background: var(--bg-tertiary);
@@ -697,6 +706,35 @@ a:hover { color: var(--accent-hover); }
   margin-top: 6px;
 }
 
+/* ========== Loading Skeleton ========== */
+.loading-skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  animation: skeletonIn 0.3s ease;
+}
+@keyframes skeletonIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.skeleton-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.skeleton-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 .about-text {
   color: var(--text-secondary);
   font-size: 13px;
@@ -888,6 +926,7 @@ a:hover { color: var(--accent-hover); }
   transition: border-color var(--transition-fast);
 }
 .agent-item:hover { border-color: var(--border-light); }
+.agent-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .agent-info { flex: 1; min-width: 0; }
 .agent-name {
   font-weight: 600;

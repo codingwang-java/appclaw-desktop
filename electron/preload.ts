@@ -16,6 +16,9 @@ import type {
 } from '../src/shared/types';
 
 const api = {
+  app: {
+    getVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
     maximize: (): Promise<void> => ipcRenderer.invoke('window:maximize'),

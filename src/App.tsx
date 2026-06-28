@@ -1,6 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ChatMessage, Session, LLMConfig, SkillInfo, ToolConfirmRequest } from './shared/types';
 import './styles.css';
+
+function formatTime(dateStr?: string) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
 
 function App() {
   const [view, setView] = useState<'chat' | 'settings'>('welcome');
@@ -11,10 +17,12 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [llmConfig, setLlmConfig] = useState<LLMConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [showSettings, setShowSettings] = useState(false);
   const [tools, setTools] = useState<any[]>([]);
   const [confirmReq, setConfirmReq] = useState<ToolConfirmRequest | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -45,6 +53,14 @@ function App() {
   // LLM test
   const [testResult, setTestResult] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [appVersion, setAppVersion] = useState('0.0.0');
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // Refs for scroll position preservation
+  const settingsScrollRefs = useRef<Record<string, number>>({});
+
+  // Map skill_id -> display name for agent cards
+  const skillNameMap = useMemo(() => new Map(localSkills.map(s => [s.id, s.name])), [localSkills]);
 
   // Load initial data
   useEffect(() => {
@@ -57,6 +73,7 @@ function App() {
           window.api.skill.list().catch(() => []),
           window.api.agent?.list().catch(() => []) || Promise.resolve([]),
         ]);
+        setAppVersion(await window.api.app.getVersion().catch(() => '0.0.0'));
         setSessions(s);
         setLlmConfig(m);
         setTools(t);
@@ -70,15 +87,17 @@ function App() {
         } else {
           setView('welcome');
         }
-      } catch (e) { setError('Failed to load data'); }
+      } catch (e) { showError('Failed to load data'); }
+      setIsInitialLoading(false);
     })();
   }, []);
 
 // Stream listener
   useEffect(() => {
-    window.api.chat.onStream((chunk) => {
+    const unsubStream = window.api.chat.onStream((chunk) => {
       if (chunk.done) {
         setIsLoading(false);
+        setIsListening(false);
         return;
       }
       setMessages(prev => {
@@ -90,6 +109,7 @@ function App() {
         }
       });
     });
+    return () => unsubStream();
   }, [activeSessionId]);
 
   // Tool confirm listener
@@ -113,12 +133,27 @@ function App() {
     return () => unsubs.forEach(fn => fn());
   }, []);
 
+  // Auto-dismiss error toast after 5s
+  const showError = useCallback((msg: string | null) => {
+    if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+    setError(msg);
+    if (msg) {
+      errorTimeoutRef.current = setTimeout(() => setError(null), 5000);
+    }
+  }, []);
+
+  const handleDismissError = useCallback(() => {
+    if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+    setError(null);
+  }, []);
+
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
     const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input.trim(), sessionId: activeSessionId || '' };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
+    setIsListening(true);
     try {
       let sid = activeSessionId;
       if (!sid) {
@@ -131,7 +166,8 @@ function App() {
       await window.api.chat.send({ sessionId: sid, message: userMsg.content, agentId: activeAgentId });
     } catch (e: any) {
       setIsLoading(false);
-      setError(e.message || 'Send failed');
+      setIsListening(false);
+      showError(e.message || 'Send failed');
     }
   };
 
@@ -167,6 +203,10 @@ function App() {
   // ---- Settings Drawer Navigation ----
   // Click nav item -> always show content panel (level 2)
   const navigateSetting = (setting: string) => {
+    // Save current scroll position
+    if (settingsScrollRef.current) {
+      settingsScrollRefs.current[activeSetting] = settingsScrollRef.current.scrollTop;
+    }
     setActiveSetting(setting);
     setDrawerLevel(2);
     setDrawerStack(prev => [{ level: 1, setting: prev[0]?.setting || 'llm' }, { level: 2, setting, data: null }]);
@@ -260,7 +300,7 @@ function App() {
     setMarketplaceLoading(false);
   };
 
-const loadPopularMarketplace = async () => {
+  const loadPopularMarketplace = async () => {
     setMarketplaceLoading(true);
     setMarketplaceQuery('');
     try {
@@ -284,6 +324,7 @@ const loadPopularMarketplace = async () => {
 
   // ---- Scroll into view ----
   const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- LLM Test ----
   const testConnection = async () => {
@@ -299,6 +340,13 @@ const loadPopularMarketplace = async () => {
   };
 
   const activeTitle = sessions.find((s) => s.id === activeSessionId)?.title || 'AppClaw';
+
+  // Restore scroll position when switching settings sections
+  useEffect(() => {
+    if (settingsScrollRef.current && settingsScrollRefs.current[activeSetting] !== undefined) {
+      settingsScrollRef.current.scrollTop = settingsScrollRefs.current[activeSetting];
+    }
+  }, [activeSetting]);
 
   // ---- Render ----
   return (
@@ -403,7 +451,12 @@ const loadPopularMarketplace = async () => {
             </div>
           )}
 
-          {showSettings ? (
+          {isInitialLoading ? (
+            <div className="loading-skeleton">
+              <div className="skeleton-spinner" />
+              <div className="skeleton-text">Loading AppClaw...</div>
+            </div>
+          ) : showSettings ? (
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               {/* ===== Settings Drawer Layer 1: Navigation ===== */}
               <div style={{
@@ -440,12 +493,13 @@ const loadPopularMarketplace = async () => {
 
               {/* ===== Settings Drawer Layer 2: Content ===== */}
               <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-                <div style={{
+                <div ref={settingsScrollRef} style={{
                   flex: 1, overflow: 'auto',
                   borderRight: drawerLevel >= 3 ? '1px solid var(--border)' : 'none',
                   padding: '24px 28px', maxWidth: drawerLevel >= 3 ? '55%' : '100%',
                   transition: 'all 0.25s'
-                }}>
+                }}
+                  onScroll={e => { settingsScrollRefs.current[activeSetting] = (e.target as HTMLElement).scrollTop; }}>
                   {/* LLM Config */}
                   {activeSetting === 'llm' && (
                     <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
@@ -485,9 +539,8 @@ const loadPopularMarketplace = async () => {
                       {agents.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>No agents configured</div>}
                       <div className="agent-list">
                         {agents.map(a => (
-                          <div key={a.id} className={`agent-item ${activeAgentId === a.id ? 'agent-active' : ''}`}
-                            onClick={() => setActiveAgentId(a.id)}
-                            style={{ cursor: 'pointer', ...(activeAgentId === a.id ? { borderColor: 'var(--accent)', boxShadow: '0 0 0 1px var(--accent)' } : {}) }}>
+                          <div key={a.id} className={`agent-item ${activeAgentId === a.id ? 'active' : ''}`}
+                            onClick={() => setActiveAgentId(a.id)}>
                             <div className="agent-info">
                               <div className="agent-name">{a.name} {a.default && <span className="agent-default">Default</span>}</div>
                               <div className="agent-desc">{a.description}</div>
@@ -495,7 +548,7 @@ const loadPopularMarketplace = async () => {
                               {a.skills?.length > 0 && (
                                 <div className="agent-skills">
                                   <span>Skills: </span>
-                                  {a.skills.map((s: string) => <span key={s} className="agent-skill-tag">{s}</span>)}
+                                  {a.skills?.map((s: string) => <span key={s} className="agent-skill-tag">{skillNameMap.get(s) || s}</span>)}
                                 </div>
                               )}
                             </div>
@@ -553,7 +606,7 @@ const loadPopularMarketplace = async () => {
                     <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
                       <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>Updates</div>
                       <div className="update-section">
-                        <span className="update-info">Current version: v0.4.2</span>
+                        <span className="update-info">Current version: v{appVersion}</span>
                         <button className="btn-primary" style={{ padding: '7px 18px', fontSize: 13 }}
                           onClick={async () => {
                             setUpdateState({ status: 'idle' });
@@ -573,7 +626,7 @@ const loadPopularMarketplace = async () => {
                     <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
                       <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>About</div>
                       <div className="about-text">
-                        <p><strong>AppClaw</strong> v0.4.2</p>
+                        <p><strong>AppClaw</strong> v{appVersion}</p>
                         <p style={{ marginTop: 8 }}>A desktop AI agent with autonomous capabilities.</p>
                         <p style={{ marginTop: 8, color: 'var(--text-muted)' }}>Built with Electron + React + TypeScript.</p>
                       </div>
@@ -692,6 +745,7 @@ const loadPopularMarketplace = async () => {
                       <div className={`msg-bubble ${m.role === 'assistant' && m.content === '' && isLoading ? 'typing' : ''}`}>
                         {m.content}
                       </div>
+                      {m.createdAt && <div className="msg-time">{formatTime(m.createdAt)}</div>}
                     </div>
                   </div>
                 ))}
@@ -721,7 +775,7 @@ const loadPopularMarketplace = async () => {
 
       {/* Tool Confirm Overlay */}
       {confirmReq && (
-        <div className="modal-overlay" onClick={() => setConfirmReq(null)}>
+        <div className="modal-overlay" onClick={() => { if (!confirmLoading) setConfirmReq(null); }}>
           <div className="confirm-card" onClick={e => e.stopPropagation()}>
             <div className="confirm-title">Tool Confirmation Required</div>
             <div className="confirm-body">
@@ -730,8 +784,10 @@ const loadPopularMarketplace = async () => {
               {confirmReq.reason && <p style={{ marginTop: 8, opacity: 0.7 }}>Reason: {confirmReq.reason}</p>}
             </div>
             <div className="confirm-btns">
-              <button className="btn-allow" onClick={() => { window.api.tools.respondConfirm(confirmReq.messageId, true); setConfirmReq(null); }}>Allow</button>
-              <button className="btn-deny" onClick={() => { window.api.tools.respondConfirm(confirmReq.messageId, false); setConfirmReq(null); }}>Deny</button>
+              <button className="btn-allow" disabled={confirmLoading}
+                onClick={() => { setConfirmLoading(true); window.api.tools.respondConfirm(confirmReq.messageId, true); setConfirmReq(null); setConfirmLoading(false); }}>{confirmLoading ? 'Processing...' : 'Allow'}</button>
+              <button className="btn-deny" disabled={confirmLoading}
+                onClick={() => { setConfirmLoading(true); window.api.tools.respondConfirm(confirmReq.messageId, false); setConfirmReq(null); setConfirmLoading(false); }}>{confirmLoading ? 'Processing...' : 'Deny'}</button>
             </div>
           </div>
         </div>
@@ -744,7 +800,7 @@ const loadPopularMarketplace = async () => {
           background: 'var(--red-dim)', border: '1px solid var(--red)',
           borderRadius: 'var(--radius)', color: 'var(--red)', fontSize: 13, zIndex: 2000,
           animation: 'slideDown 0.3s ease', cursor: 'pointer'
-        }} onClick={() => setError(null)}>
+        }} onClick={handleDismissError}>
           {error}
         </div>
       )}
@@ -812,6 +868,9 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
   const [searchInput, setSearchInput] = useState(marketplaceQuery);
   const [resultMsg, setResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
   const [activeTopic, setActiveTopic] = useState<string>('all');
+
+  // Sync search input when parent marketplaceQuery changes
+  useEffect(() => { setSearchInput(marketplaceQuery); }, [marketplaceQuery]);
 
   const handleInstall = async (skill: any) => {
     setInstalling(skill.name);
