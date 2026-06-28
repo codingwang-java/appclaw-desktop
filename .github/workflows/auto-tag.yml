@@ -1,0 +1,35 @@
+name: Auto Tag on Main Push
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version and create tag
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          echo "Version: $VERSION"
+          echo "Tag: $TAG"
+
+          # Check if tag already exists
+          if git ls-remote --exit-code origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
