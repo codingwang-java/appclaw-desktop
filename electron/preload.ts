@@ -71,7 +71,11 @@ const api = {
     },
     list: (agentId?: string, limit?: number): Promise<MemoryItem[]> => ipcRenderer.invoke('memory:list', { agentId, limit }),
     delete: (memoryId: string): Promise<boolean> => ipcRenderer.invoke('memory:delete', memoryId),
-    update: (id: string, content: string, importance?: number): Promise<boolean> => ipcRenderer.invoke('memory:update', { id, content, importance })
+    update: (id: string, content: string, importance?: number): Promise<boolean> => ipcRenderer.invoke('memory:update', { id, content, importance }),
+    vectorSearch: (query: string, agentId?: string, limit?: number): Promise<MemoryItem[]> =>
+      ipcRenderer.invoke('memory:vector:search', { query, agentId, limit }),
+    saveWithVector: (content: string, memoryType?: string, agentId?: string, sourceSession?: string): Promise<string> =>
+      ipcRenderer.invoke('memory:save:vector', { content, memoryType, agentId, sourceSession }),
   },
   tools: {
     list: (): Promise<MCPServerConfig[]> => ipcRenderer.invoke('tool:list'),

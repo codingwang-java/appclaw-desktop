@@ -49,12 +49,14 @@ function App() {
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
   const [installedSkillIds, setInstalledSkillIds] = useState<Set<string>>(new Set());
   const [installedSkillNames, setInstalledSkillNames] = useState<Set<string>>(new Set());
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // LLM test
   const [testResult, setTestResult] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [appVersion, setAppVersion] = useState('0.0.0');
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [nudgeSuggestion, setNudgeSuggestion] = useState<string | null>(null);
 
   // Refs for scroll position preservation
   const settingsScrollRefs = useRef<Record<string, number>>({});
@@ -98,6 +100,14 @@ function App() {
       if (chunk.done) {
         setIsLoading(false);
         setIsListening(false);
+        // Show nudge suggestion after response completes if enough messages
+        setMessages(prev => {
+          const nonSysMsgs = prev.filter(m => m.role !== 'system');
+          if (nonSysMsgs.length >= 6) {
+            setNudgeSuggestion('This conversation contains useful information. Save it as persistent memory?');
+          }
+          return prev;
+        });
         return;
       }
       setMessages(prev => {
@@ -167,6 +177,7 @@ function App() {
     } catch (e: any) {
       setIsLoading(false);
       setIsListening(false);
+      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
       showError(e.message || 'Send failed');
     }
   };
@@ -180,6 +191,7 @@ function App() {
   };
 
   const deleteSession = async (id: string) => {
+    if (!window.confirm('Delete this session and all its messages?')) return;
     await window.api.session.delete(id);
     setSessions(prev => prev.filter(s => s.id !== id));
     if (activeSessionId === id) {
@@ -190,6 +202,7 @@ function App() {
   };
 
   const selectSession = async (id: string) => {
+    if (id === activeSessionId) return;
     setActiveSessionId(id);
     const msgs = await window.api.message.list(id).catch(() => []);
     setMessages(msgs);
@@ -221,16 +234,21 @@ function App() {
 
   const popDrawer = () => {
     if (drawerStack.length <= 1) return;
+    const currentSetting = drawerStack[drawerStack.length - 1]?.setting;
     const newStack = drawerStack.slice(0, -1);
     setDrawerStack(newStack);
     const prev = newStack[newStack.length - 1];
     setDrawerLevel(prev.level);
     setActiveSetting(prev.setting);
-    // Reset modal states when closing Layer 3
-    setShowAgentModal(false);
-    setEditingAgent(null);
-    setShowSkillModal(false);
-    setEditingSkill(null);
+    // Only reset modal states relevant to the layer being closed
+    if (currentSetting === 'agent-form' || currentSetting === 'agent-skills') {
+      setShowAgentModal(false);
+      setEditingAgent(null);
+    }
+    if (currentSetting === 'skill-form') {
+      setShowSkillModal(false);
+      setEditingSkill(null);
+    }
   };
 
   // ---- Agent actions ----
@@ -251,6 +269,8 @@ function App() {
   };
 
   const deleteAgent = async (id: string) => {
+    const agent = agents.find(a => a.id === id);
+    if (!window.confirm(`Delete agent "${agent?.name || id}"?`)) return;
     await window.api.agent?.delete(id);
     loadAgents();
     if (activeAgentId === id) setActiveAgentId('default');
@@ -289,8 +309,8 @@ function App() {
 
   // ---- Marketplace ----
   const searchMarketplace = async (query: string) => {
-    setMarketplaceLoading(true);
     setMarketplaceQuery(query);
+    setMarketplaceLoading(true);
     try {
       const results = await window.api.skill.marketplace.search(query);
       setMarketplaceSkills(results);
@@ -299,6 +319,12 @@ function App() {
     }
     setMarketplaceLoading(false);
   };
+
+  // Debounced search for rapid typing
+  const debouncedSearch = useCallback((query: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => searchMarketplace(query), 300);
+  }, []);
 
   const loadPopularMarketplace = async () => {
     setMarketplaceLoading(true);
@@ -468,6 +494,7 @@ function App() {
                   { key: 'llm', label: 'LLM Config', icon: 'M12 2L2 7l10 5 10-5-10-5z' },
                   { key: 'agents', label: 'Agents', icon: 'M12 12a4 4 0 100-8 4 4 0 000 8z M2 21v-2a6 6 0 0112 0v2' },
                   { key: 'skills', label: 'Skills', icon: 'M9 11l3-3 3 3 M12 2v8' },
+                  { key: 'memory', label: 'Memory', icon: 'M12 6v12M6 12h12M4 4l16 16' },
                   { key: 'updates', label: 'Updates', icon: 'M12 2v4M12 22v-4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M22 12h-4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83' },
                   { key: 'about', label: 'About', icon: 'M12 12c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z M12 14c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z' },
                 ].map(item => (
@@ -599,6 +626,11 @@ function App() {
                         Skills are stored in <code>~/.appclaw/skills/</code> as <code>SKILL.md</code> files. Browse the <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => { pushDrawer('marketplace'); searchMarketplace(''); }}>Marketplace</span> to discover more.
                       </div>
                     </div>
+                  )}
+
+                  {/* Memory */}
+                  {activeSetting === 'memory' && (
+                    <MemoryPanel />
                   )}
 
                   {/* Updates */}
@@ -758,6 +790,34 @@ function App() {
                   </div>
                 )}
               </div>
+              {/* Nudge bar */}
+              {nudgeSuggestion && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px',
+                  background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)',
+                  fontSize: 12, color: 'var(--text-secondary)',
+                }}>
+                  <span style={{ flex: 1 }}>{nudgeSuggestion}</span>
+                  <button style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer'
+                  }} onClick={async () => {
+                    const lastMsgs = messages.filter(m => m.role !== 'system').slice(-4);
+                    const text = lastMsgs.map(m => `[${m.role}]: ${m.content.slice(0, 200)}`).join('\n');
+                    await window.api.memory.saveWithVector(text, 'conversation', activeAgentId, activeSessionId || undefined);
+                    setNudgeSuggestion(null);
+                  }}>
+                    Save to Memory
+                  </button>
+                  <button style={{
+                    padding: '4px 8px', fontSize: 11, color: 'var(--text-muted)',
+                    background: 'none', border: 'none', cursor: 'pointer'
+                  }} onClick={() => setNudgeSuggestion(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
               <div className="input-area">
                 <div className="input-box">
                   <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
@@ -866,7 +926,7 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
 }) {
   const [installing, setInstalling] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState(marketplaceQuery);
-  const [resultMsg, setResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
+  const [installResultMsg, setInstallResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
   const [activeTopic, setActiveTopic] = useState<string>('all');
 
   // Sync search input when parent marketplaceQuery changes
@@ -1088,6 +1148,111 @@ function SkillForm({ editingSkill, onSave, onCancel }: {
         <button className="btn-primary" onClick={() => onSave(form)}>Save</button>
         <button className="btn-cancel" onClick={onCancel}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// ===== Memory Panel Component =====
+
+function MemoryPanel() {
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => { loadMemories(); }, []);
+
+  const loadMemories = async () => {
+    setLoading(true);
+    try {
+      const list = await window.api.memory.list();
+      setMemories(list);
+    } catch { setMemories([]); }
+    setLoading(false);
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) { loadMemories(); return; }
+    setSearching(true);
+    try {
+      const results = await window.api.memory.vectorSearch(searchQuery);
+      setMemories(results);
+    } catch { setMemories([]); }
+    setSearching(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this memory?')) return;
+    await window.api.memory.delete(id);
+    loadMemories();
+  };
+
+  return (
+    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Memory Management</div>
+      <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+        View and manage persistent memories. Use semantic search to find relevant information.
+      </div>
+
+      {/* Search bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)', padding: '8px 14px',
+      }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+        <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleSearch()}
+          placeholder="Semantic search memories..." style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 13 }} />
+        <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }} onClick={handleSearch} disabled={searching}>
+          {searching ? 'Searching...' : 'Search'}
+        </button>
+      </div>
+
+      {/* Memory list */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)', fontSize: 13 }}>Loading memories...</div>
+      ) : memories.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: 14 }}>No memories stored yet</div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>Memories are automatically saved during conversations</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {memories.map(m => (
+            <div key={m.id} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px',
+              background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{
+                    fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600,
+                    background: 'var(--accent-glow)', color: 'var(--accent)'
+                  }}>{m.memoryType || 'fact'}</span>
+                  {m.createdAt && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    {new Date(m.createdAt).toLocaleDateString('zh-CN')}
+                  </span>}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                  {m.content}
+                </div>
+              </div>
+              <button onClick={() => handleDelete(m.id)} style={{
+                padding: 4, color: 'var(--text-muted)', flexShrink: 0,
+                transition: 'color var(--transition-fast)'
+              }} title="Delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

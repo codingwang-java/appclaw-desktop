@@ -30,7 +30,10 @@ import {
   listAllMemories,
   deleteMemory,
   updateMemory,
-  renameSession
+  renameSession,
+  generateEmbedding,
+  saveMemoryWithVector,
+  vectorSearchMemory
 } from './services/memory-service';
 import {
   getWorkspace,
@@ -317,6 +320,14 @@ export function registerIpcHandlers() {
       return;
     }
   );
+
+  // 向量记忆 IPC
+  ipcMain.handle('memory:vector:search', async (_e, { query, agentId, limit }: { query: string; agentId?: string; limit?: number }) => {
+    return vectorSearchMemory(query, agentId, limit || 5);
+  });
+  ipcMain.handle('memory:save:vector', async (_e, { content, memoryType, agentId, sourceSession }: { content: string; memoryType?: string; agentId?: string; sourceSession?: string }) => {
+    return saveMemoryWithVector(content, memoryType || 'fact', agentId, sourceSession);
+  });
 
   ipcMain.on('app:log', (_e, msg) => {
     console.log('[app]', msg);

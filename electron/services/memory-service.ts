@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { vector } from '@electric-sql/pglite/vector';
 import fs from 'fs';
 import path from 'path';
 import { homedir } from 'os';
@@ -131,6 +132,12 @@ CREATE INDEX IF NOT EXISTS idx_memory_agent ON long_term_memory(agent_id);
 CREATE INDEX IF NOT EXISTS idx_episodic_agent ON episodic_memory(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_skills ON agent_skills(agent_id);
 
+-- Vector memory support
+CREATE TABLE IF NOT EXISTS memory_vectors (
+  memory_id TEXT PRIMARY KEY REFERENCES long_term_memory(id) ON DELETE CASCADE,
+  embedding VECTOR(1536)
+);
+
 INSERT INTO agents (id, name, model, system_prompt, temperature, tools, tool_permissions)
 VALUES (
   'default-agent',
@@ -190,7 +197,7 @@ export async function initDatabase(dbPath: string): Promise<PGlite> {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  db = new PGlite(dbPath);
+  db = new PGlite(dbPath, { extensions: { vector } });
 
   const statements = INIT_SQL
     .split(';')
@@ -788,5 +795,70 @@ async function extractFactsWithLLM(conversationText: string): Promise<string[]> 
   } catch {
     return [];
   }
+}
+
+// ---- Vector Embedding Support ----
+
+export async function generateEmbedding(text: string): Promise<number[] | null> {
+  try {
+    const { getLLMConfig } = await import('./llm-provider');
+    const config = getLLMConfig();
+    if (!config.apiKey || !config.baseUrl) return null;
+
+    const resp = await fetch(`${config.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` },
+      body: JSON.stringify({ model: config.model || 'text-embedding-ada-002', input: text })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as any;
+    return data?.data?.[0]?.embedding || null;
+  } catch { return null; }
+}
+
+export async function saveMemoryWithVector(content: string, memoryType: string = 'fact', agentId?: string, sourceSession?: string): Promise<string> {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  await getDb().query(
+    'INSERT INTO long_term_memory (id, content, memory_type, agent_id, source_session, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, content, memoryType, agentId || null, sourceSession || null, now]
+  );
+  generateEmbedding(content).then(emb => {
+    if (emb && emb.length === 1536) {
+      getDb().query('INSERT INTO memory_vectors (memory_id, embedding) VALUES ($1, $2::real[]) ON CONFLICT (memory_id) DO UPDATE SET embedding = $2::real[]',
+        [id, JSON.stringify(emb)]).catch(() => {});
+    }
+  }).catch(() => {});
+  return id;
+}
+
+export async function vectorSearchMemory(query: string, agentId?: string, limit: number = 5): Promise<MemoryItem[]> {
+  try {
+    const emb = await generateEmbedding(query);
+    if (!emb || emb.length !== 1536) {
+      return searchAgentMemory(agentId || '', query, limit);
+    }
+    const embJson = JSON.stringify(emb);
+    let sql = `SELECT m.id, m.content, m.memory_type as "memoryType", m.importance,
+                      m.access_count as "accessCount", m.created_at as "createdAt"
+               FROM long_term_memory m
+               INNER JOIN memory_vectors v ON v.memory_id = m.id
+               WHERE m.is_active = 1`;
+    const params: any[] = [embJson];
+    if (agentId) {
+      sql += ' AND m.agent_id = $2';
+      params.push(agentId);
+    }
+    sql += ' ORDER BY v.embedding <=> $1::real[] LIMIT $' + (params.length + 1);
+    params.push(limit);
+    const result = await getDb().query<MemoryItem>(sql, params);
+    return result.rows;
+  } catch {
+    return searchAgentMemory(agentId || '', query, limit);
+  }
+}
+
+export async function addAgentMemoryWithVector(agentId: string, content: string, memoryType: string = 'fact'): Promise<string> {
+  return saveMemoryWithVector(content, memoryType, agentId);
 }
 
