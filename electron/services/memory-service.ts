@@ -198,24 +198,41 @@ export async function initDatabase(dbPath: string): Promise<PGlite> {
   }
 
   // 检测并修复损坏的数据库文件（空文件或上次启动未完成写入的文件）
+  let useDbPath = dbPath;
   if (fs.existsSync(dbPath)) {
     try {
       const stat = fs.statSync(dbPath);
       if (stat.size === 0) {
         console.warn('[DB] Detected corrupt 0-byte database file, removing...');
-        fs.unlinkSync(dbPath);
+        try { fs.unlinkSync(dbPath); } catch (e) {
+          console.warn('[DB] Cannot delete corrupt file (locked?), using fallback path');
+          useDbPath = dbPath + '.fresh';
+        }
       }
     } catch (e) {
       console.warn('[DB] Failed to check/remove corrupt database file:', e);
     }
   }
 
+  // 如果主路径文件被锁不可删除，使用备用路径
+  if (useDbPath !== dbPath && fs.existsSync(dbPath)) {
+    const stat = fs.statSync(dbPath);
+    if (stat.size > 0) {
+      // 文件恢复正常，使用主路径
+      useDbPath = dbPath;
+    }
+  }
+
   try {
-    db = new PGlite(dbPath, { extensions: { vector } });
+    db = new PGlite(useDbPath, { extensions: { vector } });
   } catch (e) {
     console.error('[DB] PGlite initialization failed, attempting recovery...', e);
     // 如果初始化失败，尝试删除文件重新创建
-    try { if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath); } catch {}
+    if (useDbPath === dbPath) {
+      try { if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath); } catch {}
+    } else {
+      try { if (fs.existsSync(useDbPath)) fs.unlinkSync(useDbPath); } catch {}
+    }
     db = new PGlite(dbPath, { extensions: { vector } });
   }
 
