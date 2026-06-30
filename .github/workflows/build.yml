@@ -27,7 +27,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package & Publish
+      - name: Package & Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -40,10 +40,7 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{"Authorization"="token $env:GH_TOKEN"}
-          if ($release.draft) {
-            Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$($release.id)" -Headers @{"Authorization"="token $env:GH_TOKEN"} -Method Patch -Body '{"draft":false}' -ContentType "application/json"
-            Write-Host "Release $tag published (draft → published)"
-          } else {
-            Write-Host "Release $tag is already published"
-          }
+          $repo = "${{ github.repository }}"
+          # 用 gh CLI 直接发布 release（gh 预装在 GitHub runner 上）
+          gh release edit "$tag" --draft=false --repo "$repo"
+          Write-Host "Release $tag published (draft → published)"
