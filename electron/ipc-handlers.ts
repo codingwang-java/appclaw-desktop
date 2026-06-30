@@ -154,9 +154,6 @@ export function registerIpcHandlers() {
   ipcMain.handle('skill:export', async (_e, skillId: string) => exportSkill(skillId));
   ipcMain.handle('skill:import', async (_e, zipBase64: string) => importSkill(zipBase64));
 
-  ipcMain.handle('skill:marketplace:search', async (_e, query: string) => searchMarketplace(query));
-  ipcMain.handle('skill:marketplace:install', async (_e, skillUrl: string) => installFromMarketplace(skillUrl));
-
   // Skill Marketplace
   // 热门 Skill 排行榜（预置精选，带真实下载源）
   const POPULAR_SKILLS = [
