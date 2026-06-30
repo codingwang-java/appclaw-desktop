@@ -197,7 +197,27 @@ export async function initDatabase(dbPath: string): Promise<PGlite> {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  db = new PGlite(dbPath, { extensions: { vector } });
+  // 检测并修复损坏的数据库文件（空文件或上次启动未完成写入的文件）
+  if (fs.existsSync(dbPath)) {
+    try {
+      const stat = fs.statSync(dbPath);
+      if (stat.size === 0) {
+        console.warn('[DB] Detected corrupt 0-byte database file, removing...');
+        fs.unlinkSync(dbPath);
+      }
+    } catch (e) {
+      console.warn('[DB] Failed to check/remove corrupt database file:', e);
+    }
+  }
+
+  try {
+    db = new PGlite(dbPath, { extensions: { vector } });
+  } catch (e) {
+    console.error('[DB] PGlite initialization failed, attempting recovery...', e);
+    // 如果初始化失败，尝试删除文件重新创建
+    try { if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath); } catch {}
+    db = new PGlite(dbPath, { extensions: { vector } });
+  }
 
   const statements = INIT_SQL
     .split(';')
