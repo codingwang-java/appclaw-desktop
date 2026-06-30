@@ -49,6 +49,41 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+/* ========== Light Theme ========== */
+:root.theme-light {
+  --bg-deepest: #f5f6f8;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fb;
+  --bg-tertiary: #f0f2f6;
+  --bg-elevated: #ffffff;
+  --bg-hover: #eef0f5;
+  --bg-active: #e4e7ee;
+  --border: #e1e4eb;
+  --border-light: #d0d4de;
+  --border-focus: #6c8cff;
+  --text-primary: #1a1d24;
+  --text-secondary: #5b6172;
+  --text-muted: #8a90a0;
+  --accent: #5a7ae8;
+  --accent-hover: #6c8cff;
+  --accent-soft: #4d6ad0;
+  --accent-glow: rgba(108, 140, 255, 0.12);
+  --accent-glow-strong: rgba(108, 140, 255, 0.2);
+  --accent-dim: rgba(108, 140, 255, 0.08);
+  --purple: #8b6fd6;
+  --purple-soft: #7a5fc0;
+  --green: #10b981;
+  --green-dim: rgba(16, 185, 129, 0.1);
+  --red: #ef4444;
+  --red-dim: rgba(239, 68, 68, 0.1);
+  --yellow: #f59e0b;
+  --yellow-dim: rgba(245, 158, 11, 0.1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 20px rgba(108, 140, 255, 0.08);
+}
+
 /* ========== Reset ========== */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; overflow: hidden; }

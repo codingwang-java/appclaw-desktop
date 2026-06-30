@@ -58,6 +58,15 @@ function App() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [nudgeSuggestion, setNudgeSuggestion] = useState<string | null>(null);
 
+  // Theme
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      const saved = localStorage.getItem('appclaw-theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {}
+    return 'dark';
+  });
+
   // Refs for scroll position preservation
   const settingsScrollRefs = useRef<Record<string, number>>({});
 
@@ -93,6 +102,17 @@ function App() {
       setIsInitialLoading(false);
     })();
   }, []);
+
+  // Apply theme to document
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('theme-light');
+    } else {
+      root.classList.remove('theme-light');
+    }
+    try { localStorage.setItem('appclaw-theme', theme); } catch {}
+  }, [theme]);
 
 // Stream listener
   useEffect(() => {
@@ -495,6 +515,7 @@ function App() {
                   { key: 'agents', label: 'Agents', icon: 'M12 12a4 4 0 100-8 4 4 0 000 8z M2 21v-2a6 6 0 0112 0v2' },
                   { key: 'skills', label: 'Skills', icon: 'M9 11l3-3 3 3 M12 2v8' },
                   { key: 'memory', label: 'Memory', icon: 'M12 6v12M6 12h12M4 4l16 16' },
+                  { key: 'appearance', label: 'Appearance', icon: 'M12 3v1M12 20v1M4.22 4.22l.7.7M19.07 19.07l.7.7M1 12h1M22 12h1M4.22 19.78l.7-.7M19.07 4.93l.7-.7M12 5a7 7 0 100 14 7 7 0 000-14z' },
                   { key: 'updates', label: 'Updates', icon: 'M12 2v4M12 22v-4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M22 12h-4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83' },
                   { key: 'about', label: 'About', icon: 'M12 12c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z M12 14c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z' },
                 ].map(item => (
@@ -631,6 +652,65 @@ function App() {
                   {/* Memory */}
                   {activeSetting === 'memory' && (
                     <MemoryPanel />
+                  )}
+
+                  {/* Appearance */}
+                  {activeSetting === 'appearance' && (
+                    <div className="settings" style={{ padding: 0, maxWidth: '100%' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>Appearance</div>
+                      <div className="field">
+                        <label>Theme</label>
+                        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                          <button
+                            onClick={() => setTheme('dark')}
+                            style={{
+                              flex: 1, padding: '16px', borderRadius: 'var(--radius-md)',
+                              border: `2px solid ${theme === 'dark' ? 'var(--accent)' : 'var(--border)'}`,
+                              background: theme === 'dark' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
+                              transition: 'all var(--transition-fast)',
+                              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <div style={{
+                              width: 48, height: 48, borderRadius: '50%',
+                              background: 'linear-gradient(135deg, #1a1d24 0%, #0f1218 100%)',
+                              border: '2px solid #2a2e38',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}>
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9ca3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                              </svg>
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Dark</span>
+                          </button>
+                          <button
+                            onClick={() => setTheme('light')}
+                            style={{
+                              flex: 1, padding: '16px', borderRadius: 'var(--radius-md)',
+                              border: `2px solid ${theme === 'light' ? 'var(--accent)' : 'var(--border)'}`,
+                              background: theme === 'light' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
+                              transition: 'all var(--transition-fast)',
+                              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <div style={{
+                              width: 48, height: 48, borderRadius: '50%',
+                              background: 'linear-gradient(135deg, #ffffff 0%, #f0f2f6 100%)',
+                              border: '2px solid #e1e4eb',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}>
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5b6172" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="4"/>
+                                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+                              </svg>
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Light</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                   {/* Updates */}
