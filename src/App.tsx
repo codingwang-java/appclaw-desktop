@@ -1005,7 +1005,7 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
   onSearch: (q: string) => void; onInstall: (skill: any) => Promise<any>;
   installedSkillIds: Set<string>; installedSkillNames: Set<string>;
 }) {
-  const [installing, setInstalling] = useState<string | null>(null);
+  const [isInstalling, setIsInstalling] = useState(false);
   const [searchInput, setSearchInput] = useState(marketplaceQuery);
   const [installResultMsg, setInstallResultMsg] = useState<{ id: string; success: boolean; msg: string } | null>(null);
   const [activeTopic, setActiveTopic] = useState<string>('all');
@@ -1014,10 +1014,11 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
   useEffect(() => { setSearchInput(marketplaceQuery); }, [marketplaceQuery]);
 
   const handleInstall = async (skill: any) => {
-    setInstalling(skill.name);
+    if (isInstalling) return;
+    setIsInstalling(true);
     setInstallResultMsg(null);
     const r = await onInstall(skill);
-    setInstalling(null);
+    setIsInstalling(false);
     if (r.success) {
       setInstallResultMsg({ id: skill.name, success: true, msg: '✓ Installed successfully' });
     } else {
@@ -1124,11 +1125,11 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
             {(() => {
               const installed = installedSkillNames.has(s.name.toLowerCase()) || (s.skillDir && installedSkillIds.has(s.skillDir.toLowerCase()));
               if (installed) return <span style={{ fontSize: 11, color: '#34c759', fontWeight: 600, padding: '5px 14px' }}>✓ Installed</span>;
-              return <>
+              if (s.skillDir) return <>
                 <button className="btn-primary" style={{ padding: '5px 14px', fontSize: 12 }}
                   onClick={() => handleInstall(s)}
-                  disabled={installing === s.name}>
-                  {installing === s.name ? 'Installing...' : (s.skillDir ? 'Install' : 'Try Install')}
+                  disabled={isInstalling}>
+                  {isInstalling ? 'Installing...' : 'Install'}
                 </button>
                 {installResultMsg?.id === s.name && (
                   <span style={{ fontSize: 11, color: installResultMsg.success ? 'var(--green)' : 'var(--red)' }}>
@@ -1136,6 +1137,7 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
                   </span>
                 )}
               </>;
+              return <span style={{ fontSize: 11, color: 'var(--text-muted)', padding: '5px 14px' }}>Marketplace</span>;
             })()}
           </div>
         </div>

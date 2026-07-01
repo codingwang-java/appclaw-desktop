@@ -3,6 +3,7 @@ import { vector } from '@electric-sql/pglite/vector';
 import fs from 'fs';
 import path from 'path';
 import { homedir } from 'os';
+import { logger } from './logger';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatMessage, Session, MemoryItem, AgentConfig } from '../../src/shared/types';
 import { listSkills } from './skill-manager';
@@ -197,21 +198,27 @@ export async function initDatabase(dbPath: string): Promise<PGlite> {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
+  logger.info('DB', `Initializing database at ${dbPath}`);
+
   // 检测并修复损坏的数据库文件（空文件或上次启动未完成写入的文件）
   let useDbPath = dbPath;
   if (fs.existsSync(dbPath)) {
     try {
       const stat = fs.statSync(dbPath);
       if (stat.size === 0) {
-        console.warn('[DB] Detected corrupt 0-byte database file, removing...');
+        logger.warn('DB', 'Detected corrupt 0-byte database file, removing...');
         try { fs.unlinkSync(dbPath); } catch (e) {
-          console.warn('[DB] Cannot delete corrupt file (locked?), using fallback path');
+          logger.warn('DB', 'Cannot delete corrupt file (locked?), using fallback path');
           useDbPath = dbPath + '.fresh';
         }
+      } else {
+        logger.info('DB', `Database file exists, size=${stat.size}`);
       }
     } catch (e) {
-      console.warn('[DB] Failed to check/remove corrupt database file:', e);
+      logger.warn('DB', 'Failed to check/remove corrupt database file', { error: String(e) });
     }
+  } else {
+    logger.info('DB', 'Database file does not exist, will create new');
   }
 
   // 如果主路径文件被锁不可删除，使用备用路径
@@ -223,10 +230,12 @@ export async function initDatabase(dbPath: string): Promise<PGlite> {
     }
   }
 
+  logger.info('DB', `Creating PGlite instance at ${useDbPath}...`);
   try {
     db = new PGlite(useDbPath, { extensions: { vector } });
+    logger.info('DB', 'PGlite instance created successfully');
   } catch (e) {
-    console.error('[DB] PGlite initialization failed, attempting recovery...', e);
+    logger.error('DB', 'PGlite initialization failed, attempting recovery...', { error: String(e) });
     // 如果初始化失败，尝试删除文件重新创建
     if (useDbPath === dbPath) {
       try { if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath); } catch {}
