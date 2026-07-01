@@ -514,6 +514,7 @@ function App() {
                   { key: 'llm', label: 'LLM Config', icon: 'M12 2L2 7l10 5 10-5-10-5z' },
                   { key: 'agents', label: 'Agents', icon: 'M12 12a4 4 0 100-8 4 4 0 000 8z M2 21v-2a6 6 0 0112 0v2' },
                   { key: 'skills', label: 'Skills', icon: 'M9 11l3-3 3 3 M12 2v8' },
+                  { key: 'marketplace', label: 'Marketplace', icon: 'M12 2L2 7l10 5 10-5-10-5z M2 17l10 5 10-5' },
                   { key: 'memory', label: 'Memory', icon: 'M12 6v12M6 12h12M4 4l16 16' },
                   { key: 'appearance', label: 'Appearance', icon: 'M12 3v1M12 20v1M4.22 4.22l.7.7M19.07 19.07l.7.7M1 12h1M22 12h1M4.22 19.78l.7-.7M19.07 4.93l.7-.7M12 5a7 7 0 100 14 7 7 0 000-14z' },
                   { key: 'updates', label: 'Updates', icon: 'M12 2v4M12 22v-4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M22 12h-4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83' },
@@ -527,7 +528,7 @@ function App() {
                       borderRight: activeSetting === item.key ? '2px solid var(--accent)' : '2px solid transparent',
                       transition: 'all var(--transition-fast)'
                     }}
-                    onClick={() => navigateSetting(item.key)}
+                    onClick={() => { navigateSetting(item.key); if (item.key === 'marketplace') loadPopularMarketplace(); }}
                     onMouseEnter={e => { if (activeSetting !== item.key) (e.target as HTMLElement).style.background = 'var(--bg-hover)'; }}
                     onMouseLeave={e => { if (activeSetting !== item.key) (e.target as HTMLElement).style.background = 'transparent'; }}
                   >
@@ -1014,15 +1015,15 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
 
   const handleInstall = async (skill: any) => {
     setInstalling(skill.name);
-    setResultMsg(null);
+    setInstallResultMsg(null);
     const r = await onInstall(skill);
     setInstalling(null);
     if (r.success) {
-      setResultMsg({ id: skill.name, success: true, msg: '✓ Installed successfully' });
+      setInstallResultMsg({ id: skill.name, success: true, msg: '✓ Installed successfully' });
     } else {
-      setResultMsg({ id: skill.name, success: false, msg: `✗ ${r.error || 'Install failed'}` });
+      setInstallResultMsg({ id: skill.name, success: false, msg: `✗ ${r.error || 'Install failed'}` });
     }
-    setTimeout(() => setResultMsg(null), 3000);
+    setTimeout(() => setInstallResultMsg(null), 3000);
   };
 
   // Topic filter
@@ -1129,9 +1130,9 @@ function MarketplaceView({ marketplaceSkills, marketplaceLoading, marketplaceQue
                   disabled={installing === s.name}>
                   {installing === s.name ? 'Installing...' : (s.skillDir ? 'Install' : 'Try Install')}
                 </button>
-                {resultMsg?.id === s.name && (
-                  <span style={{ fontSize: 11, color: resultMsg.success ? 'var(--green)' : 'var(--red)' }}>
-                    {resultMsg.msg}
+                {installResultMsg?.id === s.name && (
+                  <span style={{ fontSize: 11, color: installResultMsg.success ? 'var(--green)' : 'var(--red)' }}>
+                    {installResultMsg.msg}
                   </span>
                 )}
               </>;
